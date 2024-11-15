@@ -13,8 +13,8 @@
   University of Texas at El Paso, Department of Computer Science.
 
   Contributors: Christoph Lauter 
-                ... and
-                ...
+                Rafael Garcia and
+                Isaac G. Padilla
 
   and based on 
 
@@ -234,9 +234,174 @@
 
 */
 
-/* Helper types and functions */
+#define elif else if
+#define FILE_TYPE 0
+#define DIR_TYPE 1
 
-/* YOUR HELPER FUNCTIONS GO HERE */
+/*Directory entry*/
+typedef struct{
+      size_t offset;
+      char name[256];
+      int type;
+} myfs_dir_entry;
+
+/*Header struct at the beginning of fsptr*/
+typedef struct{
+      size_t root_dir_offset;
+} myfs_header;
+
+/*Struct for file entrie*/
+typedef struct{
+      size_t data_offset;
+      size_t size;
+      time_t access_time;
+      time_t mod_time;
+} myfs_file;
+
+/*Directory struct*/
+typedef struct{
+      size_t offset;
+      size_t num_links;
+      time_t access_time;
+      time_t mod_time;
+      size_t entry_count;
+      myfs_dir_entry entries[];
+} myfs_dir;
+
+/*Helper skelter*/
+
+/*Convert offset to ptr*/
+void *offset_to_ptr(void *fsptr, size_t offset){
+      return (fsptr == NULL) ? NULL : (char *)fsptr + offset;
+}
+
+/*Locate a subdirectory or file within a directory*/
+void *find_entry(myfs_dir *curr_dir, const char *name, void *fsptr, int *type){
+      for(size_t i=0;i<curr_dir->entry_count;i++){
+           if(strcmp(curr_dir->entries[i].name, name) == 0){
+                  if(curr_dir->entries[i].type == FILE_TYPE){
+                        *type = FILE_TYPE;
+                        return offset_to_ptr(fsptr, curr_dir->entries[i].offset);
+                  }elif(curr_dir->entries[i].type == DIR_TYPE){
+                        *type = DIR_TYPE;
+                        return offset_to_ptr(fsptr, curr_dir->entries[i].offset);
+                  }
+           }
+      }
+      return NULL;
+}
+
+/*Locate file*/
+int find_path(void *fsptr, const char *path, myfs_file **file, myfs_dir **dir){
+      myfs_header *header = (myfs_header *)fsptr;
+
+      /*If root, ret root*/
+      if(strcmp(path, "/") == 0){
+            *dir = (myfs_dir *)offset_to_ptr(fsptr, header->root_dir_offset);
+            *file = NULL;
+            return 0;
+      }
+
+      /*Start from root*/
+      myfs_dir *curr_dir = (myfs_dir *) offset_to_ptr(fsptr, header->root_dir_offset);
+      if(!curr_dir) return -1;
+
+      /*Dup path*/
+      char path_cpy[256];
+      strncpy(path_cpy, path, sizeof(path_cpy)-1);
+      path_cpy[sizeof(path_cpy)-1] = '\0';
+
+      /*Tok path*/
+      char *token = strtok(path_cpy, "/");
+      void *entry = NULL;
+      int type = -1;
+
+      while(token){
+            /*Find next entry*/
+            entry = find_entry(current_dir,token, fsptr, &type);
+            if(!entry) return -1;
+
+            /*If entry is file*/
+            if(type == FILE_TYPE){
+                  *file = (myfs_file *)entry;
+                  *dir = NULL;
+                  return 0;
+            }else{
+                  /*Enrey is dir*/
+                  curr_dir = (myfs_dir *)entry;
+            }
+
+            token = strtok(NULL, "/");
+      }
+
+      /*Path is dir*/
+      *dir = curr_dir;
+      *file = NULL;
+      return 0;
+}
+
+/*Find dir*/
+myfs_dir *find_dir(void *fsptr, const char *path){
+      myfs_dir *dir = NULL;
+      myfs_file *file = NULL;
+      if(find_path(fsptr, path, &file, &dir) == -1)return NULL;
+      return dir;
+}
+
+/*Get parent directory*/
+myfs_dir *get_parent_dir(void *fsptr,const char *path, char *filename){
+      if(path == NULL || filename == NULL) return NULL;
+
+      /*Path is root*/
+      if(strcmp(path,"/") == 0){
+            strcpy(filename, "/");
+            return find_dir(fsptr, "/");
+      }
+
+      /*Start at root*/
+      myfs_dir *curr_dir = find_dir(fsptr, "/");
+      if(!curr_dir) return NULL;
+
+      /*Path dup*/
+      char path_cpy[256];
+      strncpy(path_cpy, path, sizeof(path_cpy)-1);
+      path_cpy[sizeof(path_cpy)-1] = '\0';
+
+      /*Tok path*/
+      char *token = strtok(path_cpy, "/");
+      char *next_token = strtok(NULL, "/");
+      int type;
+      void *entry = NULL;
+
+      /*Find next entry*/
+      while(next_token){
+            type = -1;
+            entry = find_entry(curr_dir, token, fsptr, &type);
+            if(!entry || type != DIR_TYPE) return NULL;
+
+            /*Next dir*/
+            curr_dir = (myfs_dir *)entry;
+            token = next_token;
+            next_token = strtok(NULL, "/");
+      }
+
+      /*Filename*/
+      strncpy(filename, token,255);
+      filename[255] = '\0';
+      return curr_dir;
+}
+
+/*CHeck if file exists*/
+int file_exists(myfs_dir *dir, const char *filename){
+      for(size_t i=0;i<dir->entry_count;i++) if(strcmp(dir->entries[i].name, filename) == 0) return 1;
+      return 0;
+}
+
+/*Clear file*/
+void clear_file_data(void *fsptr,size_t data_offset, size_t size){
+      void *data = offset_to_ptr(fsptr, data_offset);
+      memset(offset_to_ptr(data, 0, size));
+}
 
 /* End of helper functions */
 
@@ -266,11 +431,37 @@
    st_mtim
 
 */
-int __myfs_getattr_implem(void *fsptr, size_t fssize, int *errnoptr,
-                          uid_t uid, gid_t gid,
-                          const char *path, struct stat *stbuf) {
-  /* STUB */
-  return -1;
+int __myfs_getattr_implem(void *fsptr, size_t fssize, int *errnoptr, uid_t uid, gid_t gid, const char *path, struct stat *stbuf) {
+      myfs_file *file = NULL;
+      myfs_dir *dir = NULL;
+
+      memset(stbuf, 0, sizeof(struct stat));
+
+      if(find_path(fsptr, path, &file, &dir) == -1){
+            *errnoptr = ENOENT;
+            return -1;
+      }
+
+      stbuf->st_uid = uid;
+      stbuf->st_gid = gid;
+
+      if(dir){
+            stbuf-> st_mode = S_IFDIR | 0755;
+            stbuf->st_nlink = dir->num_links;
+            stbuf->st_atim = dir->access_time;
+            stbuf->st_mtim = dir->mod_time;
+      }elif(file){
+            stbuf->st_mode = S_IFREG | 0755;
+            stbuf->st_nlink = 1;
+            stbuf->st_size = file->size;
+            stbuf->st_atim = file->access_time;
+            stbuf->st_mtim = file->mod_time;
+      }else{
+            *errnoptr = ENOENT;
+            return -1;
+      }
+      
+      return 0;
 }
 
 /* Implements an emulation of the readdir system call on the filesystem 
@@ -309,10 +500,42 @@ int __myfs_getattr_implem(void *fsptr, size_t fssize, int *errnoptr,
    indicated by returning -1 and setting *errnoptr to EINVAL.
 
 */
-int __myfs_readdir_implem(void *fsptr, size_t fssize, int *errnoptr,
-                          const char *path, char ***namesptr) {
-  /* STUB */
-  return -1;
+int __myfs_readdir_implem(void *fsptr, size_t fssize, int *errnoptr,const char *path, char ***namesptr) {
+      myfs_dir *dir = find_dir(fsptr, path);
+
+      if(!dir){
+            *errnoptr = ENOENT;
+            return -1;
+      }
+
+      if(dir-entry_count == 0) return 0;
+
+      /*Allocate memory name*/
+      size_t num_entries = dir->entry_count;
+      *namesptr = (char **)calloc(num_entries, sizeof(char *));
+      if(!*namesptr){
+            *errnoptr = EINVAL;
+            return -1;
+      }
+
+      size_t i=0,j=0;
+      for(;i<dir->entry_count;i++){
+            if(strcmp(dir->entries[i].name, ".") == 0 || strcmp(dir->entries[i].name, "..") == 0){
+                  continue;
+            }
+
+            (*namesptr)[j] = (char *)calloc(strlen(dir->entries[i].name) + 1, sizeof(char));
+            if(!(*namesptr)[j]){
+                  *errnoptr = EINVAL;
+                  for(int k=0;k<j;k++) free((*namesptr)[k]);
+                  free(*namesptr);
+                  return -1;
+            }
+            strcpy((*namesptr)[j], dir->entries[i].name);
+            j++;
+      }
+      
+      return num_entries;
 }
 
 /* Implements an emulation of the mknod system call for regular files
@@ -332,10 +555,49 @@ int __myfs_readdir_implem(void *fsptr, size_t fssize, int *errnoptr,
    The error codes are documented in man 2 mknod.
 
 */
-int __myfs_mknod_implem(void *fsptr, size_t fssize, int *errnoptr,
-                        const char *path) {
-  /* STUB */
-  return -1;
+int __myfs_mknod_implem(void *fsptr, size_t fssize, int *errnoptr,const char *path) {
+      myfs_header *header = (myfs_header *)fsptr;
+      char filename[256];
+      myfs_dir *parent_dir = get_parent_dir(fsptr,path,filename);
+
+      /*No parent dir*/
+      if(!parent_dir){
+            *errnoptr = ENOENT;
+            return -1;
+      }
+
+      /*File already exists*/
+      if(file_exists(parent_dir, filename)){
+            *errnoptr = EEXIST;
+            return -1;
+      }
+
+      /*Not enough space*/
+      if(header->root_dir_offset + sizeof(myfs_file) >= fssize){
+            *errnoptr = ENOSPC;
+            return -1;
+      }
+
+      /*Find mem for archivo*/
+      size_t new_file_offset = header->root_dir_offset + parent_dir->entry_count;
+      my_fs *new_file = (myfs_file *) offset_to_ptr(fsptr, new_file_offset);
+
+      /*Assign attributes*/
+      new_file->data_offset = 0;
+      new_file->size = 0;
+      new_file->access_time = time(NULL);
+      new_file->mod_time = time(NULL);
+
+      /*Add to parent dir*/
+      myfs_dir_entry *new_entry = &parent_dir->entries[parent_dir->entry_count];
+
+      new_entry->offset = new_file_offset;
+      strcpy(new_entry->name, filename);
+      new_entry->type = FILE_TYPE;
+
+      parent_dir->entry_count++;
+
+      return 0;
 }
 
 /* Implements an emulation of the unlink system call for regular files
@@ -350,10 +612,48 @@ int __myfs_mknod_implem(void *fsptr, size_t fssize, int *errnoptr,
    The error codes are documented in man 2 unlink.
 
 */
-int __myfs_unlink_implem(void *fsptr, size_t fssize, int *errnoptr,
-                        const char *path) {
-  /* STUB */
-  return -1;
+int __myfs_unlink_implem(void *fsptr, size_t fssize, int *errnoptr, const char *path) {
+      myfs_file *file = NULL;
+      myfs_dir *parent_dir = NULL;
+      char filename[256];
+
+      /*Get parent name and filename*/
+      if(!(parent_dir = get_parent_dir(fsptr, path, filename))){
+            *errnoptr = ENOENT;
+            return -1;
+      }
+
+      /*Check if file exists*/
+      int type = -1;
+      myfs_file *file_to_rm = (myfs_file *)find_entry(parent_dir, filename. fsptr, &type);
+      if(!file_to_rm || type != FILE_TYPE){
+            *errnoptr = ENOENT;
+            return -1;
+      }
+
+      /*Clear data*/
+      clear_file_data(fsptr, file_to_rm->data_offset, file_to_rm->size);
+
+      /*Find file and rm*/
+      int found = 0;
+      for(size_t i=0;i<parent_dir->entry_count;i++){
+            if(strcmp(parent_dir->entries[i].name, filename) == 0){
+                  found = 1;
+                  for(size_t j=i;j<parent_dir->entry_count-1;j++) parent_dir->entries[j] = parent_dir->entries[j+1];
+                  parent_dir->entry_count--;
+                  break;
+            }
+      }
+
+      /*File not found*/
+      if(!found){
+            *errnoptr = ENOENT;
+            return -1;
+      }
+      
+      memset(file_to_rm, 0, sizeof(myfs_file));
+
+      return 0;
 }
 
 /* Implements an emulation of the rmdir system call on the filesystem 

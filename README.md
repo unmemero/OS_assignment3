@@ -1,3 +1,3 @@
 # Assignment 3
-**Authors:**
+**Authors:** Rafael Garcia and Isaac G. Padilla
 
