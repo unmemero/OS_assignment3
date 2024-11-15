@@ -237,6 +237,7 @@
 #define elif else if
 #define FILE_TYPE 0
 #define DIR_TYPE 1
+#define ISEMPTYDIR(dir) (dir->entry_count == 0);
 
 /*Directory entry*/
 typedef struct{
@@ -671,10 +672,50 @@ int __myfs_unlink_implem(void *fsptr, size_t fssize, int *errnoptr, const char *
    The error codes are documented in man 2 rmdir.
 
 */
-int __myfs_rmdir_implem(void *fsptr, size_t fssize, int *errnoptr,
-                        const char *path) {
-  /* STUB */
-  return -1;
+int __myfs_rmdir_implem(void *fsptr, size_t fssize, int *errnoptr, const char *path) {
+      
+      /*Get parent dir*/
+      myfs_dir *parent_dir = get_parent_dir(fsptr, path, filename);
+      if(!parent_dir){
+            *errnoptr = ENOENT;
+            return -1;
+      }
+      
+      /*Check if dir to remove exists*/
+      int type = -1;
+      char dirname[256];
+      myfs_dir * dir_to_rm = (myfs_dir *) find_entry(parent_dir, dirname, fsptr, &type);
+      if(!dir_to_rm || type != DIR_TYPE){
+            *errnoptr = ENOENT;
+            return -1;
+      }
+      
+      /*Check directory for emptyness*/
+      if(!ISEMPTYDIR(dir_to_rm)){
+            *errnoptr = ENOTEMPTY;
+            return -1;
+      }
+
+      /*Seek and destroy*/
+      int found = 0;
+      for(size_t i = 0;i <parent_dir->entry_count;i++){
+            if(strcmp(parent_dir->entries[i].name,dirname) == 0){
+                  found = 1;
+                  for(size_t j=i;j<parent_dir->entry_count-1;j++) parent_dir->entries[j] = parent_dir->entries[j+1];
+                  parent_dir->entry_count--;
+                  break;
+            }
+      }
+
+      /*Not found*/
+      if(!found){
+            *errnoptr = ENOENT;
+            return -1;
+      }
+
+      memset(dir_to_rm, 0, sizeof(myfs_dir));
+
+      return 0;
 }
 
 /* Implements an emulation of the mkdir system call on the filesystem 
