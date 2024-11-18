@@ -925,8 +925,103 @@ int __myfs_mkdir_implem(void *fsptr, size_t fssize, int *errnoptr, const char *p
 */
 int __myfs_rename_implem(void *fsptr, size_t fssize, int *errnoptr,
                          const char *from, const char *to) {
-  /* STUB */
-  return -1;
+    char from_name[256], to_name[256];
+
+    // Locate the parent directories of the "from" and "to" paths
+    myfs_dir *from_parent = get_parent_dir(fsptr, from, from_name);
+    myfs_dir *to_parent = get_parent_dir(fsptr, to, to_name);
+
+    // Check directories exist
+    if (!from_parent) {
+        *errnoptr = ENOENT; 
+        return -1;
+    }
+
+    if (!to_parent) {
+        *errnoptr = ENOENT; 
+        return -1;
+    }
+
+    // Get "from" entry
+    int from_type = -1;
+    void *from_entry = find_entry(from_parent, from_name, fsptr, &from_type);
+    if (!from_entry) {
+        *errnoptr = ENOENT;
+        return -1;
+    }
+
+    // Check if "to" already exists
+    int to_type = -1;
+    void *to_entry = find_entry(to_parent, to_name, fsptr, &to_type);
+
+    if (to_entry) {
+        // Handle conflicts when "to" exists
+        if (to_type != from_type) {
+            *errnoptr = EISDIR; // Type mismatch: Cannot overwrite file with directory or vice versa
+            return -1;
+        }
+
+        if (from_type == DIR_TYPE) {
+            // Recursively merge directories
+            myfs_dir *from_dir = (myfs_dir *)from_entry;
+            myfs_dir *to_dir = (myfs_dir *)to_entry;
+
+            for (size_t i = 0; i < from_dir->entry_count; i++) {
+                myfs_dir_entry *child_entry = &from_dir->entries[i];
+
+                // Construct new paths for children
+                char child_from_path[256], child_to_path[256];
+                snprintf(child_from_path, sizeof(child_from_path), "%s/%s", from, child_entry->name);
+                snprintf(child_to_path, sizeof(child_to_path), "%s/%s", to, child_entry->name);
+
+                // Recursively rename/merge child
+                if (__myfs_rename_implem(fsptr, fssize, errnoptr, child_from_path, child_to_path) != 0) {
+                    return -1; // Propagate error if renaming a child fails
+                }
+            }
+        } else if (from_type == FILE_TYPE) {
+            // Overwrite the file in "to"
+            myfs_file *to_file = (myfs_file *)to_entry;
+            myfs_file *from_file = (myfs_file *)from_entry;
+
+            clear_file_data(fsptr, to_file->data_offset, to_file->size);
+            memcpy(to_file, from_file, sizeof(myfs_file));
+        }
+    }
+
+    // Remove "from" entry from its parent directory
+    int found = 0;
+    for (size_t i = 0; i < from_parent->entry_count; i++) {
+        if (strcmp(from_parent->entries[i].name, from_name) == 0) {
+            found = 1;
+            // Shift remaining entries to fill the gap
+            for (size_t j = i; j < from_parent->entry_count - 1; j++) {
+                from_parent->entries[j] = from_parent->entries[j + 1];
+            }
+            from_parent->entry_count--;
+            break;
+        }
+    }
+    if (!found) {
+        *errnoptr = ENOENT; // "from" entry was not found in the parent
+        return -1;
+    }
+
+    // Add "from" entry to the "to" directory
+    if (to_parent->entry_count >= (fssize / sizeof(myfs_dir_entry))) {
+        *errnoptr = ENOSPC; // No space to add the new entry
+        return -1;
+    }
+
+    myfs_dir_entry *new_entry = &to_parent->entries[to_parent->entry_count];
+    new_entry->offset = (size_t)from_entry - (size_t)fsptr; // Offset from start
+    strncpy(new_entry->name, to_name, 255);
+    new_entry->name[255] = '\0';
+    new_entry->type = from_type;
+
+    to_parent->entry_count++;
+
+    return 0; // Success
 }
 
 /* Implements an emulation of the truncate system call on the filesystem 
@@ -948,7 +1043,50 @@ int __myfs_rename_implem(void *fsptr, size_t fssize, int *errnoptr,
 int __myfs_truncate_implem(void *fsptr, size_t fssize, int *errnoptr,
                            const char *path, off_t offset) {
   /* STUB */
-  return -1;
+  myfs_file *file = NULL;
+    myfs_dir *dir = NULL;
+
+    // Locate the file using the helper function
+    if (find_path(fsptr, path, &file, &dir) == -1 || !file) {
+        *errnoptr = ENOENT; // File not found
+        return -1;
+    }
+
+    // Ensure the offset is valid
+    if (offset < 0) {
+        *errnoptr = EINVAL; // Invalid offset
+        return -1;
+    }
+
+    size_t current_size = file->size;
+    size_t data_offset = file->data_offset;
+
+    if (offset < current_size) {
+        // Shrinking the file: clear excess data
+        clear_file_data(fsptr, data_offset + offset, current_size - offset);
+        file->size = offset; // Update file size
+    } else if (offset > current_size) {
+        // Expanding the file
+        size_t expand_amount = offset - current_size;
+
+        // Check if there is enough space in the filesystem
+        if (data_offset + offset > fssize) {
+            *errnoptr = ENOSPC; // Not enough space
+            return -1;
+        }
+
+        // Zero out the new space
+        void *new_data = offset_to_ptr(fsptr, data_offset + current_size);
+        memset(new_data, 0, expand_amount);
+
+        file->size = offset; // Update file size
+    }
+
+    // Update file timestamps
+    file->mod_time = time(NULL);
+    file->access_time = time(NULL);
+
+    return 0; // Success
 }
 
 /* Implements an emulation of the open system call on the filesystem 

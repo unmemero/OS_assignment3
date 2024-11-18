@@ -9,7 +9,7 @@ package_manager_check() {
     if command -v brew &> /dev/null; then
         PACKAGE_MANAGER="brew"
     elif command -v pacman &> /dev/null; then
-        PACKAGE_MANAGER="pacman"
+        PACKAGE_MANAGER="pacman
     elif command -v apt-get &> /dev/null; then
         PACKAGE_MANAGER="apt"
     elif command -v dnf &> /dev/null; then
