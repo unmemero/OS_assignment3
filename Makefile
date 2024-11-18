@@ -20,6 +20,9 @@ push:
 		git pull --rebase origin main; \
 		git push origin main; \
 	fi
+pull:
+	@echo -e "\033[34mPulling latest changes with rebase...\033[0m"; \
+	git pull origin main --rebase
 pdf:
 	pandoc README.md -o Report.pdf
 tar:
