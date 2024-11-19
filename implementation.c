@@ -236,6 +236,8 @@
 
 #define FILE_TYPE 0
 #define DIR_TYPE 1
+#define BLOCK_SIZE 1024     
+#define NAME_MAX_LENGTH 255
 #define ISEMPTYDIR(dir) (dir->entry_count == 0)
 #define MAX_DIR_SIZE (1<<13)
 #define MAX(a,b) ((a) > (b) ? (a) : (b))
@@ -1290,9 +1292,6 @@ int __myfs_utimens_implem(void *fsptr, size_t fssize, int *errnoptr,
 */
 int __myfs_statfs_implem(void *fsptr, size_t fssize, int *errnoptr,
                          struct statvfs* stbuf) {
-  // Define constants directly inside the function
-    const size_t BLOCK_SIZE = 1024;       // Block size (1KB)
-    const size_t NAME_MAX_LENGTH = 255;  // Maximum file or directory name length
 
     // Validate inputs
     if (!fsptr || !stbuf) {
