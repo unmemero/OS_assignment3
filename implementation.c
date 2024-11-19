@@ -1115,10 +1115,31 @@ int __myfs_truncate_implem(void *fsptr, size_t fssize, int *errnoptr,
    The error codes are documented in man 2 open.
 
 */
-int __myfs_open_implem(void *fsptr, size_t fssize, int *errnoptr,
-                       const char *path) {
-  /* STUB */
-  return -1;
+int __myfs_open_implem(void *fsptr, size_t fssize, int *errnoptr, const char *path) {
+      /*Check FS pointer*/
+      if(!fsptr || !fssize){
+            *errnoptr = EFAULT;
+            return -1;
+      }
+
+      /*Check FS status*/
+      myfs_header *header = (myfs_header *)fsptr;
+      if(header->root_dir_offset >= fssize || heaader->last_offset > fssize){
+            *errnoptr = EFAULT;
+            return -1;
+      }
+
+      /*Locate file or directory*/
+      myfs_file *file = NULL;
+      myfs_dir *dir = NULL;
+      int res = find_path(fsptr, path, &file, &dir);
+      if(res < 0){
+            *errnoptr = ENOENT;
+            return -1;
+      }
+
+      /*Success*/
+      return 0;
 }
 
 /* Implements an emulation of the read system call on the filesystem 
