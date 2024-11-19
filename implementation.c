@@ -238,6 +238,7 @@
 #define DIR_TYPE 1
 #define ISEMPTYDIR(dir) (dir->entry_count == 0)
 #define MAX_DIR_SIZE (1<<13)
+#define MAX(a,b) ((a) > (b) ? (a) : (b))
 
 
 /*Directory entry*/
@@ -407,66 +408,6 @@ void clear_file_data(void *fsptr,size_t data_offset, size_t size){
 }
 
 /* End of helper functions */
-
-/* Implements an emulation of the stat system call on the filesystem 
-   of size fssize pointed to by fsptr. 
-   
-   If path can be followed and describes a file or directory 
-   that exists and is accessable, the access information is 
-   put into stbuf. 
-
-   On success, 0 is returned. On failure, -1 is returned and 
-   the appropriate error code is put into *errnoptr.
-
-   man 2 stat documents all possible error codes and gives more detail
-   on what fields of stbuf need to be filled in. Essentially, only the
-   following fields need to be supported:
-
-   st_uid      the value passed in argument
-   st_gid      the value passed in argument
-   st_mode     (as fixed values S_IFDIR | 0755 for directories,
-                                S_IFREG | 0755 for files)
-   st_nlink    (as many as there are subdirectories (not files) for directories
-                (including . and ..),
-                1 for files)
-   st_size     (supported only for files, where it is the real file size)
-   st_atim
-   st_mtim
-
-*/
-int __myfs_getattr_implem(void *fsptr, size_t fssize, int *errnoptr, uid_t uid, gid_t gid, const char *path, struct stat *stbuf) {
-      myfs_file *file = NULL;
-      myfs_dir *dir = NULL;
-
-      memset(stbuf, 0, sizeof(struct stat));
-      
-
-      if(find_path(fsptr, path, &file, &dir) == -1){
-            *errnoptr = ENOENT;
-            return -1;
-      }
-
-      stbuf->st_uid = uid;
-      stbuf->st_gid = gid;
-
-      if(dir){
-            stbuf-> st_mode = S_IFDIR | 0755;
-            stbuf->st_nlink = dir->num_links;
-            stbuf->st_atim = dir->access_time;
-            stbuf->st_mtim = dir->mod_time;
-      }else if(file){
-            stbuf->st_mode = S_IFREG | 0755;
-            stbuf->st_nlink = 1;
-            stbuf->st_size = file->size;
-            stbuf->st_atim = file->access_time;
-            stbuf->st_mtim = file->mod_time;
-      }else{
-            *errnoptr = ENOENT;
-            return -1;
-      }
-      
-      return 0;
-}
 
 /* Implements an emulation of the stat system call on the filesystem 
    of size fssize pointed to by fsptr. 
@@ -703,7 +644,6 @@ int __myfs_mknod_implem(void *fsptr, size_t fssize, int *errnoptr, const char *p
 
 */
 int __myfs_unlink_implem(void *fsptr, size_t fssize, int *errnoptr, const char *path) {
-      myfs_file *file = NULL;
       myfs_dir *parent_dir = NULL;
       char filename[256];
 
@@ -1124,7 +1064,7 @@ int __myfs_open_implem(void *fsptr, size_t fssize, int *errnoptr, const char *pa
 
       /*Check FS status*/
       myfs_header *header = (myfs_header *)fsptr;
-      if(header->root_dir_offset >= fssize || heaader->last_offset > fssize){
+      if(header->root_dir_offset >= fssize || header->last_offset > fssize){
             *errnoptr = EFAULT;
             return -1;
       }
@@ -1157,10 +1097,55 @@ int __myfs_open_implem(void *fsptr, size_t fssize, int *errnoptr, const char *pa
    The error codes are documented in man 2 read.
 
 */
-int __myfs_read_implem(void *fsptr, size_t fssize, int *errnoptr,
-                       const char *path, char *buf, size_t size, off_t offset) {
-  /* STUB */
-  return -1;
+int __myfs_read_implem(void *fsptr, size_t fssize, int *errnoptr, const char *path, char *buf, size_t size, off_t offset) {
+      /*Check if FS is in valid state*/
+      if(!fsptr || !fssize){
+            *errnoptr = EFAULT;
+            return -1;
+      }
+
+      /*Find file*/
+      myfs_file *file = NULL;
+      myfs_dir *dir = NULL;
+      if(find_path(fsptr, path, &file, &dir) == -1 || !file){
+            *errnoptr = ENOENT;
+            return -1;
+      }
+
+      /*Check if it's regular file*/
+      if(dir){
+            *errnoptr = EISDIR;    
+            return -1;
+      }
+
+      /*Check offset*/
+      if(offset < 0){
+            *errnoptr = EINVAL;
+            return -1;
+      }
+
+      /*Offset is beyond EOF, return 0*/
+      if(offset >= (off_t)file->size) return 0;
+
+      /*Adjust offset size*/
+      size_t max_bytes = file->size - offset;
+      size_t read_bytes = MAX(max_bytes,size);
+
+      /*Check read not beyond FS*/
+      if((file->data_offset + offset + read_bytes) > fssize){
+            *errnoptr = EIO;
+            return -1;
+      }
+
+      /*Copy data from mem to buffet*/
+      void *data = offset_to_ptr(fsptr, file->data_offset + offset);
+      memcpy(buf, data, read_bytes);
+
+      /*Update access time*/
+      file->access_time = time(NULL);
+      
+      /*Return read bytes*/
+      return (int)read_bytes;
 }
 
 /* Implements an emulation of the write system call on the filesystem 
@@ -1178,8 +1163,7 @@ int __myfs_read_implem(void *fsptr, size_t fssize, int *errnoptr,
    The error codes are documented in man 2 write.
 
 */
-int __myfs_write_implem(void *fsptr, size_t fssize, int *errnoptr,
-                        const char *path, const char *buf, size_t size, off_t offset) {
+int __myfs_write_implem(void *fsptr, size_t fssize, int *errnoptr, const char *path, const char *buf, size_t size, off_t offset) {
   /* STUB */
   return -1;
 }
