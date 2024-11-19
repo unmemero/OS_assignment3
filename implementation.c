@@ -866,6 +866,7 @@ int __myfs_mkdir_implem(void *fsptr, size_t fssize, int *errnoptr, const char *p
 int __myfs_rename_implem(void *fsptr, size_t fssize, int *errnoptr,
                          const char *from, const char *to) {
     char from_name[256], to_name[256];
+    char child_from_path[512], child_to_path[512]; // Increased size for longer paths
 
     // Locate the parent directories of the "from" and "to" paths
     myfs_dir *from_parent = get_parent_dir(fsptr, from, from_name);
@@ -904,15 +905,19 @@ int __myfs_rename_implem(void *fsptr, size_t fssize, int *errnoptr,
         if (from_type == DIR_TYPE) {
             // Recursively merge directories
             myfs_dir *from_dir = (myfs_dir *)from_entry;
-            myfs_dir *to_dir = (myfs_dir *)to_entry;
 
             for (size_t i = 0; i < from_dir->entry_count; i++) {
                 myfs_dir_entry *child_entry = &from_dir->entries[i];
 
                 // Construct new paths for children
-                char child_from_path[256], child_to_path[256];
                 snprintf(child_from_path, sizeof(child_from_path), "%s/%s", from, child_entry->name);
                 snprintf(child_to_path, sizeof(child_to_path), "%s/%s", to, child_entry->name);
+
+                // Ensure no truncation occurred
+                if (strlen(child_from_path) >= sizeof(child_from_path) || strlen(child_to_path) >= sizeof(child_to_path)) {
+                    *errnoptr = ENAMETOOLONG; // Path too long
+                    return -1;
+                }
 
                 // Recursively rename/merge child
                 if (__myfs_rename_implem(fsptr, fssize, errnoptr, child_from_path, child_to_path) != 0) {
@@ -955,8 +960,8 @@ int __myfs_rename_implem(void *fsptr, size_t fssize, int *errnoptr,
 
     myfs_dir_entry *new_entry = &to_parent->entries[to_parent->entry_count];
     new_entry->offset = (size_t)from_entry - (size_t)fsptr; // Offset from start
-    strncpy(new_entry->name, to_name, 255);
-    new_entry->name[255] = '\0';
+    strncpy(new_entry->name, to_name, sizeof(new_entry->name) - 1);
+    new_entry->name[sizeof(new_entry->name) - 1] = '\0'; // Ensure null-termination
     new_entry->type = from_type;
 
     to_parent->entry_count++;
@@ -1285,7 +1290,55 @@ int __myfs_utimens_implem(void *fsptr, size_t fssize, int *errnoptr,
 */
 int __myfs_statfs_implem(void *fsptr, size_t fssize, int *errnoptr,
                          struct statvfs* stbuf) {
-  /* STUB */
-  return -1;
+  // Define constants directly inside the function
+    const size_t BLOCK_SIZE = 1024;       // Block size (1KB)
+    const size_t NAME_MAX_LENGTH = 255;  // Maximum file or directory name length
+
+    // Validate inputs
+    if (!fsptr || !stbuf) {
+        if (errnoptr) *errnoptr = EINVAL; // Invalid argument
+        return -1;
+    }
+
+    // Zero out the statvfs structure to ensure clean data
+    memset(stbuf, 0, sizeof(struct statvfs));
+
+    // Calculate total number of blocks in the filesystem
+    size_t total_blocks = fssize / BLOCK_SIZE;
+
+    // Calculate used and free blocks
+    size_t used_blocks = 0;
+    size_t free_blocks = 0;
+
+    // Traverse memory to determine block usage
+    unsigned char *memory = (unsigned char *)fsptr;
+    for (size_t block = 0; block < total_blocks; block++) {
+        size_t block_start = block * BLOCK_SIZE;
+        int block_used = 0;
+
+        // Check if any byte in the block is non-zero
+        for (size_t i = 0; i < BLOCK_SIZE; i++) {
+            if (memory[block_start + i] != 0) {
+                block_used = 1;
+                break;
+            }
+        }
+
+        if (block_used) {
+            used_blocks++;
+        }
+    }
+
+    free_blocks = total_blocks - used_blocks;
+
+    // Populate the statvfs structure
+    stbuf->f_bsize = BLOCK_SIZE;          // Block size in bytes
+    stbuf->f_frsize = BLOCK_SIZE;         // Fragment size (same as block size)
+    stbuf->f_blocks = total_blocks;       // Total number of blocks
+    stbuf->f_bfree = free_blocks;         // Free blocks
+    stbuf->f_bavail = free_blocks;        // Free blocks available to unprivileged users
+    stbuf->f_namemax = NAME_MAX_LENGTH;   // Maximum length of file/directory name
+
+    return 0; // Success
 }
 
