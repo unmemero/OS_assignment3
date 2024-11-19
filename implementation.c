@@ -1164,8 +1164,47 @@ int __myfs_read_implem(void *fsptr, size_t fssize, int *errnoptr, const char *pa
 
 */
 int __myfs_write_implem(void *fsptr, size_t fssize, int *errnoptr, const char *path, const char *buf, size_t size, off_t offset) {
-  /* STUB */
-  return -1;
+  myfs_file *file = NULL;
+    myfs_dir *dir = NULL;
+
+    // Locate the file to write to
+    if (find_path(fsptr, path, &file, &dir) == -1 || !file) {
+        *errnoptr = ENOENT; // File does not exist
+        return -1;
+    }
+
+    // Ensure offset and size are valid
+    if (offset < 0 || size <= 0) {
+        *errnoptr = EINVAL; // Invalid offset or size
+        return -1;
+    }
+
+    // Calculate the end of the write
+    size_t end_offset = offset + size;
+
+    // Ensure the write does not exceed the filesystem size
+    if (file->data_offset + end_offset > fssize) {
+        *errnoptr = ENOSPC; // Not enough space in the filesystem
+        return -1;
+    }
+
+    // Expand the file if necessary
+    if (end_offset > file->size) {
+        size_t expand_amount = end_offset - file->size;
+        void *new_data = offset_to_ptr(fsptr, file->data_offset + file->size);
+        memset(new_data, 0, expand_amount); // Zero out newly allocated space
+        file->size = end_offset; // Update file size
+    }
+
+    // Perform the write operation
+    void *write_start = offset_to_ptr(fsptr, file->data_offset + offset);
+    memcpy(write_start, buf, size);
+
+    // Update file metadata
+    file->mod_time = time(NULL); // Update modification time
+    file->access_time = time(NULL); // Update access time
+
+    return size; // Return the number of bytes written
 }
 
 /* Implements an emulation of the utimensat system call on the filesystem 
@@ -1183,8 +1222,42 @@ int __myfs_write_implem(void *fsptr, size_t fssize, int *errnoptr, const char *p
 */
 int __myfs_utimens_implem(void *fsptr, size_t fssize, int *errnoptr,
                           const char *path, const struct timespec ts[2]) {
-  /* STUB */
-  return -1;
+  myfs_file *file = NULL;
+    myfs_dir *dir = NULL;
+
+    // Locate the file or directory by path
+    if (find_path(fsptr, path, &file, &dir) == -1) {
+        *errnoptr = ENOENT; // Path does not exist
+        return -1;
+    }
+
+    // If times are provided, update the appropriate fields
+    if (ts) {
+        if (file) {
+            // Update file access and modification times
+            file->access_time = ts[0].tv_sec;
+            file->mod_time = ts[1].tv_sec;
+        } else if (dir) {
+            // Update directory access and modification times
+            dir->access_time = ts[0].tv_sec;
+            dir->mod_time = ts[1].tv_sec;
+        } else {
+            *errnoptr = ENOENT; // Neither file nor directory found
+            return -1;
+        }
+    } else {
+        // If `ts` is NULL, set times to the current time
+        time_t current_time = time(NULL);
+        if (file) {
+            file->access_time = current_time;
+            file->mod_time = current_time;
+        } else if (dir) {
+            dir->access_time = current_time;
+            dir->mod_time = current_time;
+        }
+    }
+
+    return 0; // Success
 }
 
 /* Implements an emulation of the statfs system call on the filesystem 
