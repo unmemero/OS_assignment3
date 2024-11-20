@@ -1,7 +1,7 @@
 all: 
 	gcc -g -O0 -Wall myfs.c implementation.c `pkg-config fuse --cflags --libs` -o myfs
 run:
-	gdb --args ./myfs --backupfile=test.myfs ~/fuse-mnt/ -f
+	gdb --args ./myfs --backupfile=test.myfs /home/rgarcia117/fuse-mnt/ -f
 unmount:
 	fusermount -u ~/fuse-mnt
 clean:
