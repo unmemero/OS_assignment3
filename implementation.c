@@ -320,16 +320,24 @@ static int init_fs(void *fsptr, size_t fssize){
       root_dir[1].inode_offset = info_block->root_inode;
       root->size += 2 * sizeof(directory_entry);
 
-      /*Init bitmap*/
+      /*Init inode bitmap*/
       memset(offset_to_ptr(fsptr, fssize, info_block->free_inode_bitmap), 0, MAX_INODES / 8);
-      /* Mark root as used*/
-      uint8_t *bitmap = (uint8_t *)offset_to_ptr(fsptr, fssize, info_block->free_inode_bitmap);
-      bitmap[0] |= (uint8_t)1;
+      /* Mark root as used */
+      uint8_t *inode_bitmap = (uint8_t *)offset_to_ptr(fsptr, fssize, info_block->free_inode_bitmap);
+      inode_bitmap[0] |= (uint8_t)1;
 
       /*Init data block bitmap*/
       memset(offset_to_ptr(fsptr, fssize, info_block->free_block_bitmap), 0, MAX_DATA_BLOCKS / 8);
+      
+      /* Mark root's data block as used */
+      unsigned char *data_bitmap = (unsigned char*)offset_to_ptr(fsptr, fssize, info_block->free_block_bitmap);
+      if (data_bitmap) {
+          data_bitmap[0] |= 1; // Mark the first data block as used (root's data block)
+      }
+
       return 1;
 }
+
 
 static inode* find_inode(void *fsptr, size_t fssize, const char * path, size_t *inode_offset_ptr){
       fs_info_block *info_block = (fs_info_block*)fsptr;
@@ -777,7 +785,7 @@ int __myfs_mknod_implem(void *fsptr, size_t fssize, int *errnoptr, const char *p
 
       size_t num_entries = parent_dir->size / sizeof(directory_entry);
       for (size_t i = 0; i < num_entries; i++) {
-            if (strcmp(entries[i].name, file_name) == 0) {
+            if (!strcmp(entries[i].name, file_name)) {
                   free(parent_path);
                   free(file_name);
                   *errnoptr = EEXIST;
