@@ -235,165 +235,192 @@
 
 /* Helper types and functions */
 
+/**************Definitions**************/
+
 #define FS_ID 0x4D595346
 #define BLOCK_SIZE 4096
 #define INODE_SIZE 128
 #define MAX_FILENAME 255
 #define MAX_INODES 1024
 #define ROOT_INODE 0
-#define MAX_DATA_BLOCKS 2528 // Added definition
+#define MAX_DATA_BLOCKS 2528 
 
-/*Main info block of file system*/
+/**************Structs adn typedefs**************/
+
+/*
+*   Main info block of file system
+*       - fs_id: file system id (to check if fs is initialized)
+*       - size: size of file system
+*       - root_inode: offset to root inode
+*       - free_inode_bitmap: offset to inode bitmap
+*       - free_block_bitmap: offset to data block bitmap
+*       - inode_table: offset to inode table
+*       - data_blocks: offset to data blocks
+*       - max_data_blocks: maximum number of data blocks
+*/
 typedef struct{
-      uint32_t fs_id;
-      size_t size;
-      size_t root_inode;
-      size_t free_inode_bitmap;
-      size_t free_block_bitmap;
-      size_t inode_table;
-      size_t data_blocks;
-      size_t max_data_blocks; // Added field
+    uint32_t fs_id;
+    size_t size;
+    size_t root_inode;
+    size_t free_inode_bitmap;
+    size_t free_block_bitmap;
+    size_t inode_table;
+    size_t data_blocks;
+    size_t max_data_blocks;
 }fs_info_block;
 
-/*Node in filesystem tree (directory or file)*/
+/*
+*   Node in filesystem tree (directory or file)
+*       - mode: file type and permissions
+*       - uid: user id
+*       - gid: group id
+*       - size: size of file
+*       - access_time: last access time
+*       - modification_time: last modification time
+*       - change_time: last change time
+*       - data_block: offset to data block
+*/
 typedef struct{
-      mode_t mode;
-      uid_t uid;
-      gid_t gid;
-      size_t size;
-      time_t access_time;
-      time_t modification_time;
-      time_t change_time;
-      size_t data_block;
+    mode_t mode;
+    uid_t uid;
+    gid_t gid;
+    size_t size;
+    time_t access_time;
+    time_t modification_time;
+    time_t change_time;
+    size_t data_block;
 }inode;
 
+/*
+*   Entry inside a directory
+*       - name: name of file
+*       - inode_offset: offset to inode of file
+*/
 typedef struct{
-      char name[MAX_FILENAME + 1];
-      size_t inode_offset;
+    char name[MAX_FILENAME + 1];
+    size_t inode_offset;
 }directory_entry;
 
-/*Get offset to ptr*/
+
+/**************Functions**************/
+
+/**
+ * Converts an offset to a pointer in the file system
+ */
 static void* offset_to_ptr(void *fsptr, size_t fssize, size_t offset){
-      return (offset >= fssize) ? NULL : (char *)fsptr + offset;
+    return (offset >= fssize) ? NULL : (char *)fsptr + offset;
 }
 
-/*Turn ptr into an offset*/
-/* MAY NOT NEED THIS FUNCTION */
-/*
-static size_t ptr_to_offset(void *fsptr, size_t fssize, void *ptr){
-      char *base = (char*)fsptr;
-      char *p = (char*)ptr;
-      return (p < base || p >= base + fssize) ? (size_t)-1 : (size_t)(p - base);
-}
-*/
-
-/*Init the fs*/
+/**
+ * Init the fs
+ */
 static int init_fs(void *fsptr, size_t fssize){
-      fs_info_block *info_block = (fs_info_block*)fsptr;
-      
-      /*FS already ini*/
-      if(info_block->fs_id == FS_ID) return 1;
+    /*Info block at current */
+    fs_info_block *info_block = (fs_info_block*)fsptr;
+    
+    /*FS already init*/
+    if(info_block->fs_id == FS_ID) return 1;
 
-      /*Init block*/
-      info_block->fs_id = FS_ID;
-      info_block->size = fssize;
-      info_block->root_inode = sizeof(fs_info_block);
-      info_block->free_inode_bitmap = info_block->root_inode + INODE_SIZE;
-      info_block->free_block_bitmap = info_block->free_inode_bitmap + (MAX_INODES / 8);
-      info_block->inode_table = info_block->free_block_bitmap + (MAX_DATA_BLOCKS / 8);
-      info_block->data_blocks = info_block->inode_table + (MAX_INODES * INODE_SIZE);
-      info_block->max_data_blocks = MAX_DATA_BLOCKS; // Initialize max_data_blocks
+    /*Init info block of fs*/
+    info_block->fs_id = FS_ID;
+    info_block->size = fssize;
+    info_block->root_inode = sizeof(fs_info_block);
+    info_block->free_inode_bitmap = info_block->root_inode + INODE_SIZE;
+    info_block->free_block_bitmap = info_block->free_inode_bitmap + (MAX_INODES / 8);
+    info_block->inode_table = info_block->free_block_bitmap + (MAX_DATA_BLOCKS / 8);
+    info_block->data_blocks = info_block->inode_table + (MAX_INODES * INODE_SIZE);
+    info_block->max_data_blocks = MAX_DATA_BLOCKS; 
 
-      /*Init root*/
-      inode *root = (inode*)offset_to_ptr(fsptr, fssize, info_block->root_inode);
-      root->mode = S_IFDIR | 0755;
-      root->uid = getuid();
-      root->gid = getgid();
-      root->size = 0;
-      root->access_time = root->modification_time = root->change_time = time(NULL);
-      root->data_block = info_block->data_blocks;
+    /*Init root*/
+    inode *root = (inode*)offset_to_ptr(fsptr, fssize, info_block->root_inode);
+    root->mode = S_IFDIR | 0755;
+    root->uid = getuid();
+    root->gid = getgid();
+    root->size = 0;
+    root->access_time = root->modification_time = root->change_time = time(NULL);
+    root->data_block = info_block->data_blocks;
 
-      /*Init root dir*/
-      directory_entry *root_dir = (directory_entry*)offset_to_ptr(fsptr, fssize, root->data_block);
-      /*Add .*/
-      strcpy(root_dir[0].name, ".");
-      root_dir[0].inode_offset = info_block->root_inode;
-      /*Add ..*/
-      strcpy(root_dir[1].name, "..");
-      root_dir[1].inode_offset = info_block->root_inode;
-      root->size += 2 * sizeof(directory_entry);
+    /*Init root dir*/
+    directory_entry *root_dir = (directory_entry*)offset_to_ptr(fsptr, fssize, root->data_block);
+    /*Add .*/
+    strcpy(root_dir[0].name, ".");
+    root_dir[0].inode_offset = info_block->root_inode;
+    /*Add ..*/
+    strcpy(root_dir[1].name, "..");
+    root_dir[1].inode_offset = info_block->root_inode;
+    root->size += 2 * sizeof(directory_entry);
 
-      /*Init inode bitmap*/
-      memset(offset_to_ptr(fsptr, fssize, info_block->free_inode_bitmap), 0, MAX_INODES / 8);
-      /* Mark root as used */
-      uint8_t *inode_bitmap = (uint8_t *)offset_to_ptr(fsptr, fssize, info_block->free_inode_bitmap);
-      inode_bitmap[0] |= (uint8_t)1;
+    /*Init inode bitmap*/
+    memset(offset_to_ptr(fsptr, fssize, info_block->free_inode_bitmap), 0, MAX_INODES / 8);
 
-      /*Init data block bitmap*/
-      memset(offset_to_ptr(fsptr, fssize, info_block->free_block_bitmap), 0, MAX_DATA_BLOCKS / 8);
-      
-      /* Mark root's data block as used */
-      unsigned char *data_bitmap = (unsigned char*)offset_to_ptr(fsptr, fssize, info_block->free_block_bitmap);
-      if (data_bitmap) {
-          data_bitmap[0] |= 1; // Mark the first data block as used (root's data block)
-      }
+    /* Mark root as used */
+    uint8_t *inode_bitmap = (uint8_t *)offset_to_ptr(fsptr, fssize, info_block->free_inode_bitmap);
+    inode_bitmap[0] |= (uint8_t)1;
 
-      return 1;
+    /*Init data block bitmap*/
+    memset(offset_to_ptr(fsptr, fssize, info_block->free_block_bitmap), 0, MAX_DATA_BLOCKS / 8);
+    
+    /*Mark root's data block as used*/
+    unsigned char *data_bitmap = (unsigned char*)offset_to_ptr(fsptr, fssize, info_block->free_block_bitmap);
+    if (data_bitmap) data_bitmap[0] |= 1;
+
+    return 1;
 }
 
 
 static inode* find_inode(void *fsptr, size_t fssize, const char * path, size_t *inode_offset_ptr){
-      fs_info_block *info_block = (fs_info_block*)fsptr;
-      inode *curr_inode = (inode *)offset_to_ptr(fsptr, fssize, info_block->root_inode);
-      size_t curr_offset = info_block->root_inode;
+    fs_info_block *info_block = (fs_info_block*)fsptr;
+    inode *curr_inode = (inode *)offset_to_ptr(fsptr, fssize, info_block->root_inode);
+    size_t curr_offset = info_block->root_inode;
 
-      if(!strcmp(path, "/")){
-            *inode_offset_ptr = curr_offset;
-            return curr_inode;
-      }
+    if(!strcmp(path, "/")){
+        *inode_offset_ptr = curr_offset;
+        return curr_inode;
+    }
 
-      /*Tokenize path*/
-      char *path_cpy = strdup(path);
-      if (!path_cpy) return NULL;
+    /*Tokenize path*/
+    char *path_cpy = strdup(path);
+    if (!path_cpy) return NULL;
 
-      char *token = strtok(path_cpy, "/");
-      while(token){
-            if(!(curr_inode->mode & S_IFDIR)){
-                  free(path_cpy);
-                  return NULL;
-            }
+    char *token = strtok(path_cpy, "/");
+    while(token){
+        if(!(curr_inode->mode & S_IFDIR)){
+                free(path_cpy);
+                return NULL;
+        }
 
-      /*Iterate through directory*/
-            directory_entry *entries = (directory_entry *)offset_to_ptr(fsptr, fssize, curr_inode->data_block);
-            size_t num_entries = curr_inode->size / sizeof(directory_entry);
-            inode *next_inode = NULL;
-            size_t next_offset = 0;
-            int found = 0;
+        /*Iterate through directory*/
+        directory_entry *entries = (directory_entry *)offset_to_ptr(fsptr, fssize, curr_inode->data_block);
+        size_t num_entries = curr_inode->size / sizeof(directory_entry);
+        inode *next_inode = NULL;
+        size_t next_offset = 0;
+        int found = 0;
 
-            for(size_t i = 0; i < num_entries; i++){
-                  if(!strcmp(entries[i].name, token)){
-                        next_offset = entries[i].inode_offset;
-                        next_inode = (inode *)offset_to_ptr(fsptr, fssize, next_offset);
-                        found = 1;
-                        break;
-                  }
-            }
+        for(size_t i = 0; i < num_entries; i++){
+                if(!strcmp(entries[i].name, token)){
+                    next_offset = entries[i].inode_offset;
+                    next_inode = (inode *)offset_to_ptr(fsptr, fssize, next_offset);
+                    found = 1;
+                    break;
+                }
+        }
 
-            if(!found){
-                  free(path_cpy);
-                  return NULL;
-            }
+        if(!found){
+                free(path_cpy);
+                return NULL;
+        }
 
-            /*Move to next inode*/
-            curr_inode = next_inode;
-            curr_offset = next_offset;
+        /*Move to next inode*/
+        curr_inode = next_inode;
+        curr_offset = next_offset;
 
-            token = strtok(NULL, "/");
-      }
+        token = strtok(NULL, "/");
+    }
 
-      free(path_cpy);
-      if(inode_offset_ptr) *inode_offset_ptr = curr_offset;
-      return curr_inode;
+    /*Cleanup and return*/
+    free(path_cpy);
+    if(inode_offset_ptr) *inode_offset_ptr = curr_offset;
+    return curr_inode;
 }
 
 /*Split path into parent dir and base name*/
