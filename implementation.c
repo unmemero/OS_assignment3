@@ -879,7 +879,7 @@ int __myfs_mknod_implem(void *fsptr, size_t fssize, int *errnoptr, const char *p
     /*Split path*/
     char *parent_path = NULL;
     char *file_name = NULL;
-    if (split_path(path, &parent_path, &file_name) != 0) {
+    if (split_path(path, &parent_path, &file_name)) {
         *errnoptr = EINVAL;
         return -1;
     }

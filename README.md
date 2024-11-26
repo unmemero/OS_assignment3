@@ -133,15 +133,61 @@ static size_t find_free_inode(void *fsptr, size_t fssize)
 int add_dir_entry(void *fsptr, size_t fssize, inode *dir_inode, size_t dir_inode_offset, const char *name, size_t new_inode_offset)
 ```
 
--
+- To streamline the process of adding a new file or directory, we decided to condense that into its own function to improve code readability.
+
+#### 7
+
+```c
+static int remove_dir_entry(void *fsptr, size_t fssize, inode *dir_inode, size_t dir_inode_offset, const char *name)
+```
+
+- We had a similar approach to removing files and directories from directories, since we just wanted tomething to improve code readability.
+
+#### 8
+
+```c
+static size_t find_free_data_block(void *fsptr, size_t fssize)
+```
+
+- Since we determined some functions may need to find a free data block, we thought the best way to approach it is to put the process in its own function. The hardest part was figuring out how to mark the usage of the blocks in the bitmap and  getting the offset to that block, but once done, it proved to be useful in order to get a block of data to write on.
+
+#### 9
+
+```c
+static int free_data_block(void *fsptr, size_t fssize, size_t block_offset) 
+```
+
+- Similar to previous functions, we used the bitmap to mark a block as free.
+
+#### 10
+
+```c
+uint8_t * get_block_bitmap(void *fsptr, size_t fssize)
+```
+
+- Mainly to return bitmap to check if a block is free or not.
+
+#### 11
+
+```c
+size_t calculate_free_blocks(void *fsptr, size_t fssize) 
+```
+
+- We needed something to check how many free blocks are available. Figuring out the operations on the bitmap was the complex part, but once that was just a matter of calculating the number of free blocks.
 
 ## Core functions
 
 ### 1. `__myfs_getattr_implem`
 
+- Probably the most complex part is figuring was getting to know more on ehat to provide to stbuf, and to check if the filesystem is already there. Once that was figured out, it was a simple process of making a function to initialize the filesystem, findiing the current node, and populating its info on stbuf.
+
 ### 2. `__myfs_readdir_implem`
 
+- The way we decided to implement this, is by a traversal of the fs with the `find_inode` function, getting all entries with an offset to `fsptr`, and populating the names array based on the number of entries of the directory requested. The most difficult part was the memory allocation, since we needed to implement many considerations in case the filesystem failed, but essentially it was keeping track of our allocations, and freeing our allocated space.
+
 ### 3. `__myfs_mknod_implem`
+
+-
 
 ### 4. `__myfs_unlink_implem`
 
@@ -164,3 +210,5 @@ int add_dir_entry(void *fsptr, size_t fssize, inode *dir_inode, size_t dir_inode
 ### 13. `__myfs_statfs_implem`
 
 ## Testing process
+
+We used GDB with breakpoints to test each of the functions, as well as various linux filesystem command line tools.
