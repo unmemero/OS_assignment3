@@ -183,41 +183,77 @@ size_t calculate_free_blocks(void *fsptr, size_t fssize)
 
 ### 2. `__myfs_readdir_implem`
 
-- The way we decided to implement this, is by a traversal of the fs with the `find_inode` function, getting all entries with an offset to `fsptr`, and populating the names array based on the number of entries of the directory requested. The most difficult part was the memory allocation, since we needed to implement many considerations in case the filesystem failed, but essentially it was keeping track of our allocations, and freeing our allocated space.
+- The way we decided to implement this, is by a traversal of the fs with the [`find_inode`](#3) function, getting all entries with an offset to `fsptr`, and populating the names array based on the number of entries of the directory requested. The most difficult part was the memory allocation, since we needed to implement many considerations in case the filesystem failed, but essentially it was keeping track of our allocations, and freeing our allocated space.
 
 ### 3. `__myfs_mknod_implem`
 
 - In this point, since we were working on split fuinctions, we thought it would be a good idea implement a function that split the path into the child and parent components of a path. We determined for this function we required to get the parent directory first, get the entries, and check if the entry we want to add existed.
 - If all was good with that, we just needed to create a new node at the offset marked by the inode bitmap on which node was free.
 - We then populated the node with the file's information.
-- To add it to the parent, we created `add_dir_entry`, since we were developing various functions in parallel, and determined that it would be simpler to keep that into a single function. In the case we couldn't add it to the parent directory, we just free the inode bitmap, and the rest of the allocs.
+- To add it to the parent, we created [`add_dir_entry`](#6), since we were developing various functions in parallel, and determined that it would be simpler to keep that into a single function. In the case we couldn't add it to the parent directory, we just free the inode bitmap, and the rest of the allocs.
 - After that, we cleanup allocated strings, and return 0 on success.
 
 ### 4. `__myfs_unlink_implem`
 
-- We did a simillar process as in `mknod` initially, where we find the parent directory, got the entries of the parent, found the file, and got the offset of the inode.
+- We did a simillar process as in [`mknod`](#3-__myfs_mknod_implem) initially, where we find the parent directory, got the entries of the parent, found the file, and got the offset of the inode.
 - After this, since other functions that we were developing in parallel caused required the removal from a directory, we decided to implement [`remove_dir_entry`](#7) , to remove both files and directories from a parent directory.
-- After this, we just clean the bitmap, set the inode to 0, and free allocated memory.
 
 ### 5. `__myfs_rmdir_implem`
 
-- 
+- We needed to asses what we needed to do for this one initially, whcih includes:
+  - Finding the parent and child directories using [`find_inode`](#3).
+  - Checking if the directory is empty. If not don't delete.
+  - Get the parent directories entries to remove target using [`remove_dir_entry`](#7).
+  - After this, we just clean the bitmap, set the inode to 0, and free allocated memory bitmap, the structs, names, and any allocated memory.
 
 ### 6. `__myfs_mkdir_implem`
 
+- In this one, we need to:
+  - Find the parent.
+  - Get the entries.
+  - Check if there's an entry with that name.
+  - Get a free inode by checking the bitmap with [`find_free_inode`](#5).
+  - Make a new inode at the offset marked by tehe bitmap.
+  - Allocate the data blocks using [`find_free_data_block`](#8).
+  - Populate the fields of the directory.
+  - Add `.` and `..`.
+  - Add the new directory to its parent with [`add_dir_entry`](#6)
+
 ### 7. `__myfs_rename_implem`
+
+- We neeed for this one:
+  - The offset of the from parent and child nodes.
+  - The offset of the to parent and child nodes.
+  - In our design, we decided to not permit moving while non-empty (we tried with unsuccessful results, so we decided to keep it simple), so we used [`rmdir`](#5-__myfs_rmdir_implem) for files.
+  - We used [`remove_dir_entry`](#7) to get rid of the file or directory from the from parent directory.
+  - We used [`add_dir_entry`](#6) To add the new file or directory into the to parent directory.
 
 ### 8. `__myfs_truncate_implem`
 
+-
+
 ### 9. `__myfs_open_implem`
+
+- We just needed to check 2 things here, which are:
+  - Finding the inode corresponding to the current exists using [`find_inode`](#3).
+  - Finding if the offset to the file is accessible ([`offset_to_ptr`](#1) not `NULL`).
 
 ### 10. `__myfs_read_implem`
 
+- We essentially found the file inode with [`find_inode`](#3) and checked it was a regular file to start.
+- Figuring out how to use the `offset` and `size` parameters was the most difficult part. Once we figured out it was to get the total size of the bytes to read and the offset of the beginning of the file.
+- With this, we just copied the $n$ number of bytes from the pointer to the beggining of the file into the buffer, which will be handled later by whichever process requested the data.
+
 ### 11. `__myfs_write_implem`
+
+- Similar to the previous [`read`](#10-__myfs_read_implem), but now the copying of bytes occurs from the buffer to the pointer to the file's data block marked by the offset.
 
 ### 12. `__myfs_utimens_implem`
 
+- This one wansn't very complicated, since essentially the only thing done is [`find_inode`](#3), and modify the times based on the `ts` arg if valid, else, apply the time function.
+
 ### 13. `__myfs_statfs_implem`
+
 
 ## Testing process
 

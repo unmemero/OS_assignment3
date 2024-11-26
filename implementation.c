@@ -1410,7 +1410,7 @@ int __myfs_mkdir_implem(void *fsptr, size_t fssize, int *errnoptr, const char *p
     new_dir_inode->size += 2 * sizeof(directory_entry);
 
     /*Add new dir to parent*/
-    if (add_dir_entry(fsptr, fssize, parent_dir, parent_inode_offset, dir_name, new_inode_offset) != 0) {
+    if (add_dir_entry(fsptr, fssize, parent_dir, parent_inode_offset, dir_name, new_inode_offset)) {
         /*Free data block*/
         free_data_block(fsptr, fssize, data_block_offset);
         /*Unmark inode in bitmap*/
@@ -1457,7 +1457,7 @@ int __myfs_rename_implem(void *fsptr, size_t fssize, int *errnoptr, const char *
     }
 
     /*CCan't rename root*/
-    if (strcmp(from, "/") == 0) {
+    if (!strcmp(from, "/")) {
         *errnoptr = EBUSY;
         return -1;
     }
