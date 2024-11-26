@@ -694,43 +694,45 @@ size_t calculate_free_blocks(void *fsptr, size_t fssize) {
 
 */
 int __myfs_getattr_implem(void *fsptr, size_t fssize, int *errnoptr, uid_t uid, gid_t gid, const char *path, struct stat *stbuf) {
-      
-      /*Init fs*/
-      if(!init_fs(fsptr, fssize)){
-            *errnoptr = EFAULT;
-            return -1;
-      }
-      
-      /*Find inode to path*/
-      size_t inode_offset;
-      inode *node = find_inode(fsptr, fssize, path, &inode_offset);
-      if(!node){
-            *errnoptr = ENOENT;
-            return -1;
-      }
+    /*Init fs*/
+    if(!init_fs(fsptr, fssize)){
+        *errnoptr = EFAULT;
+        return -1;
+    }
+    
+    /*Find inode to path*/
+    size_t inode_offset;
+    inode *node = find_inode(fsptr, fssize, path, &inode_offset);
+    if(!node){
+        *errnoptr = ENOENT;
+        return -1;
+    }
 
-      /*Populate data structure*/
-      memset(stbuf, 0, sizeof(struct stat));
-      stbuf->st_uid = node->uid;
-      stbuf->st_gid = node->gid;
-      stbuf->st_mode = node->mode;
-      stbuf->st_size = node->size;
-      stbuf->st_atime = node->access_time;
-      stbuf->st_mtime = node->modification_time;
-      stbuf->st_ctime = node->change_time;
+    /*Populate stbuf*/
+    memset(stbuf, 0, sizeof(struct stat));
+    stbuf->st_uid = node->uid;
+    stbuf->st_gid = node->gid;
+    stbuf->st_mode = node->mode;
+    stbuf->st_size = node->size;
+    stbuf->st_atime = node->access_time;
+    stbuf->st_mtime = node->modification_time;
+    stbuf->st_ctime = node->change_time;
 
-      /*Set num links for directories*/
-      if(node->mode & S_IFDIR){
-            size_t num_entries = node->size / sizeof(directory_entry);
-            stbuf->st_nlink = num_entries;
-      }else if(node->mode & S_IFREG){
-            stbuf->st_nlink = 1;
-      }else{
-            *errnoptr = EINVAL;
-            return -1;
-      }
+    /*Set num links for directories*/
+    if(node->mode & S_IFDIR){
+        size_t num_entries = node->size / sizeof(directory_entry);
+        stbuf->st_nlink = num_entries;
+    /*Set 1 link for a file*/
+    }else if(node->mode & S_IFREG){
+        stbuf->st_nlink = 1;
+    /*Ooops, wrong type of fuiel, thoug, can we do links?*/
+    }else{
+        *errnoptr = EINVAL;
+        return -1;
+    }
 
-      return 0;
+    /*Success!*/
+    return 0;
 }
 
 /* Implements an emulation of the readdir system call on the filesystem 
@@ -770,80 +772,81 @@ int __myfs_getattr_implem(void *fsptr, size_t fssize, int *errnoptr, uid_t uid, 
 
 */
 int __myfs_readdir_implem(void *fsptr, size_t fssize, int *errnoptr,  const char *path, char ***namesptr) {
-      /*Init fs*/
-      if (!init_fs(fsptr, fssize)) {
-            *errnoptr = EFAULT;
-            return -1;
-      }
+    /*Init fs*/
+    if (!init_fs(fsptr, fssize)) {
+        *errnoptr = EFAULT;
+        return -1;
+    }
 
-      /*Find inode for map*/
-      size_t inode_offset;
-      inode *dir_inode = find_inode(fsptr, fssize, path, &inode_offset);
-      if (!dir_inode) {
-            *errnoptr = ENOENT;
-            return -1;
-      }
+    /*Find inode for map*/
+    size_t inode_offset;
+    inode *dir_inode = find_inode(fsptr, fssize, path, &inode_offset);
+    if (!dir_inode) {
+        *errnoptr = ENOENT;
+        return -1;
+    }
 
-      /*If INODE not dir*/
-      if (!(dir_inode->mode & S_IFDIR)) {
-            *errnoptr = ENOTDIR;
-            return -1;
-      }
+    /*If INODE not dir*/
+    if (!(dir_inode->mode & S_IFDIR)) {
+        *errnoptr = ENOTDIR;
+        return -1;
+    }
 
-      /*Get dir entries*/
-      directory_entry *entries = (directory_entry *)offset_to_ptr(fsptr, fssize, dir_inode->data_block);
-      if (!entries) {
-            *errnoptr = EIO;
-            return -1;
-      }
+    /*Get dir entries*/
+    directory_entry *entries = (directory_entry *)offset_to_ptr(fsptr, fssize, dir_inode->data_block);
+    if (!entries) {
+        *errnoptr = EIO;
+        return -1;
+    }
+    
+    /*Get number of entries*/
+    size_t num_entries = dir_inode->size / sizeof(directory_entry);
+    size_t valid_entries = 0;
 
-      size_t num_entries = dir_inode->size / sizeof(directory_entry);
-      size_t valid_entries = 0;
+    /*Count entries except .. .*/
+    for (size_t i = 0; i < num_entries; i++) if (strcmp(entries[i].name, ".") && strcmp(entries[i].name, "..")) valid_entries++;
 
-      /*Count entries except .. .*/
-      for (size_t i = 0; i < num_entries; i++) if (strcmp(entries[i].name, ".") && strcmp(entries[i].name, "..")) valid_entries++;
+    /*Ret 0 if no valid entries*/
+    if (!valid_entries) {
+        *namesptr = NULL; 
+        return 0;
+    }
 
-      /*Ret 0 if no valid entries*/
-      if (valid_entries == 0) {
-            *namesptr = NULL; 
-            return 0;
-      }
+    /*Allocate names array*/
+    char **names_array = calloc(valid_entries, sizeof(char *));
+    if (!names_array) {
+        *errnoptr = EINVAL;
+        return -1;
+    }
 
-      /*Allocate name array*/
-      char **names_array = calloc(valid_entries, sizeof(char *));
-      if (!names_array) {
+    size_t current_name = 0;
+
+    /*Copy each name*/
+    for (size_t i = 0; i < num_entries; i++) {
+        /*Skip . and ..*/
+        if (!strcmp(entries[i].name, ".") || !strcmp(entries[i].name, "..")) continue;
+
+        /*Allocate memory for str*/
+        size_t name_len = strlen(entries[i].name);
+        names_array[current_name] = malloc(name_len + 1);
+        if (!names_array[current_name]) {
+            /*Malloc failed, clean*/
+            for (size_t j = 0; j < current_name; j++) free(names_array[j]);
+            free(names_array);
             *errnoptr = EINVAL;
             return -1;
-      }
+        }
 
-      size_t current_name = 0;
+        /*Copy name*/
+        strcpy(names_array[current_name], entries[i].name);
+        current_name++;
+    }
 
-      /* Allocate copy of each name */
-      for (size_t i = 0; i < num_entries; i++) {
-            /*Skip . and ..*/
-            if (strcmp(entries[i].name, ".") == 0 || strcmp(entries[i].name, "..") == 0) continue;
+    /*Assign array to namesptr*/
+    *namesptr = names_array;
 
-            /*Allocate memory for str*/
-            size_t name_len = strlen(entries[i].name);
-            names_array[current_name] = malloc(name_len + 1);
-            if (!names_array[current_name]) {
-                  /*Malloc failed, clean*/
-                  for (size_t j = 0; j < current_name; j++) free(names_array[j]);
-                  free(names_array);
-                  *errnoptr = EINVAL;
-                  return -1;
-            }
-
-            /*Copy name*/
-            strcpy(names_array[current_name], entries[i].name);
-            current_name++;
-      }
-
-      /*Assign array to namesptr*/
-      *namesptr = names_array;
-
-      /*Return num names*/
-      return valid_entries;
+    /*Return num names*/
+    return valid_entries;
 }
 
 /* Implements an emulation of the mknod system call for regular files
@@ -864,108 +867,109 @@ int __myfs_readdir_implem(void *fsptr, size_t fssize, int *errnoptr,  const char
 
 */
 int __myfs_mknod_implem(void *fsptr, size_t fssize, int *errnoptr, const char *path) {
-      /* Init fs */
-      if (!init_fs(fsptr, fssize)) {
-            *errnoptr = EFAULT;
-            return -1;
-      }
+    /*Init fs*/
+    if (!init_fs(fsptr, fssize)) {
+        *errnoptr = EFAULT;
+        return -1;
+    }
 
-      /* Split path */
-      char *parent_path = NULL;
-      char *file_name = NULL;
-      if (split_path(path, &parent_path, &file_name) != 0) {
-            *errnoptr = EINVAL;
-            return -1;
-      }
+    /*Split path*/
+    char *parent_path = NULL;
+    char *file_name = NULL;
+    if (split_path(path, &parent_path, &file_name) != 0) {
+        *errnoptr = EINVAL;
+        return -1;
+    }
 
-      /* Find parent dir */
-      size_t parent_inode_offset;
-      inode *parent_dir = find_inode(fsptr, fssize, parent_path, &parent_inode_offset);
-      if (!parent_dir) {
-            free(parent_path);
-            free(file_name);
-            *errnoptr = ENOENT;
-            return -1;
-      }
+    /*Find parent dir*/
+    size_t parent_inode_offset;
+    inode *parent_dir = find_inode(fsptr, fssize, parent_path, &parent_inode_offset);
+    if (!parent_dir) {
+        free(parent_path);
+        free(file_name);
+        *errnoptr = ENOENT;
+        return -1;
+    }
 
-      /* Verify parent is dir */
-      if (!(parent_dir->mode & S_IFDIR)) {
-            free(parent_path);
-            free(file_name);
-            *errnoptr = ENOTDIR;
-            return -1;
-      }
+    /*Verify parent is dir*/
+    if (!(parent_dir->mode & S_IFDIR)) {
+        free(parent_path);
+        free(file_name);
+        *errnoptr = ENOTDIR;
+        return -1;
+    }
 
-      /* Check if file exists */
-      directory_entry *entries = (directory_entry *)offset_to_ptr(fsptr, fssize, parent_dir->data_block);
-      if (!entries) {
-            free(parent_path);
-            free(file_name);
-            *errnoptr = EIO;
-            return -1;
-      }
+    /*Check if file exists*/
+    directory_entry *entries = (directory_entry *)offset_to_ptr(fsptr, fssize, parent_dir->data_block);
+    if (!entries) {
+        free(parent_path);
+        free(file_name);
+        *errnoptr = EIO;
+        return -1;
+    }
 
-      size_t num_entries = parent_dir->size / sizeof(directory_entry);
-      for (size_t i = 0; i < num_entries; i++) {
-            if (!strcmp(entries[i].name, file_name)) {
-                  free(parent_path);
-                  free(file_name);
-                  *errnoptr = EEXIST;
-                  return -1;
-            }
-      }
+    size_t num_entries = parent_dir->size / sizeof(directory_entry);
+    for (size_t i = 0; i < num_entries; i++) {
+        if (!strcmp(entries[i].name, file_name)) {
+                free(parent_path);
+                free(file_name);
+                *errnoptr = EEXIST;
+                return -1;
+        }
+    }
 
-      /* Find free inode */
-      size_t new_inode_offset = find_free_inode(fsptr, fssize);
-      if (new_inode_offset == (size_t)-1) {
-            free(parent_path);
-            free(file_name);
-            *errnoptr = ENOSPC;
-            return -1;
-      }
+    /*Find free inode*/
+    size_t new_inode_offset = find_free_inode(fsptr, fssize);
+    if (new_inode_offset == (size_t)-1) {
+        free(parent_path);
+        free(file_name);
+        *errnoptr = ENOSPC;
+        return -1;
+    }
 
-      /* Init inode */
-      inode *new_inode = (inode *)offset_to_ptr(fsptr, fssize, new_inode_offset);
-      if (!new_inode) {
-            /* Unmark the inode in bitmap */
-            fs_info_block *info_block = (fs_info_block*)fsptr;
-            unsigned char *bitmap = (unsigned char*)offset_to_ptr(fsptr, fssize, info_block->free_inode_bitmap);
-            size_t inode_num = (new_inode_offset - info_block->inode_table) / INODE_SIZE;
-            if (inode_num < MAX_INODES) bitmap[inode_num / 8] &= ~(1 << (inode_num % 8));
-            free(parent_path);
-            free(file_name);
-            *errnoptr = EIO;
-            return -1;
-      }
+    /*Init inode*/
+    inode *new_inode = (inode *)offset_to_ptr(fsptr, fssize, new_inode_offset);
+    if (!new_inode) {
+        /*Unmark the inode in bitmap*/
+        fs_info_block *info_block = (fs_info_block*)fsptr;
+        unsigned char *bitmap = (unsigned char*)offset_to_ptr(fsptr, fssize, info_block->free_inode_bitmap);
+        size_t inode_num = (new_inode_offset - info_block->inode_table) / INODE_SIZE;
+        if (inode_num < MAX_INODES) bitmap[inode_num / 8] &= ~(1 << (inode_num % 8));
+        free(parent_path);
+        free(file_name);
+        *errnoptr = EIO;
+        return -1;
+    }
 
-      /* Set inode for regular file */
-      new_inode->mode = S_IFREG | 0644;
-      new_inode->uid = getuid();
-      new_inode->gid = getgid();
-      new_inode->size = 0;
-      new_inode->access_time = new_inode->modification_time = new_inode->change_time = time(NULL);
-      new_inode->data_block = 0;
+    /*Set inode info for file*/
+    new_inode->mode = S_IFREG | 0644;
+    new_inode->uid = getuid();
+    new_inode->gid = getgid();
+    new_inode->size = 0;
+    new_inode->access_time = new_inode->modification_time = new_inode->change_time = time(NULL);
+    new_inode->data_block = 0;
 
-      /* Add entry to parent dir */
-      if (add_dir_entry(fsptr, fssize, parent_dir, parent_inode_offset, file_name, new_inode_offset) != 0) {
-            /* Failed to add dir, unmark the inode in bitmap */
-            fs_info_block *info_block = (fs_info_block*)fsptr;
-            unsigned char *bitmap = (unsigned char*)offset_to_ptr(fsptr, fssize, info_block->free_inode_bitmap);
-            size_t inode_num = (new_inode_offset - info_block->inode_table) / INODE_SIZE;
-            if (inode_num < MAX_INODES) bitmap[inode_num / 8] &= ~(1 << (inode_num % 8));
-            /* Reset inode */
-            memset(new_inode, 0, sizeof(inode));
-            free(parent_path);
-            free(file_name);
-            *errnoptr = ENOSPC;
-            return -1;
-      }
+    /*Add entry to parent dir*/
+    if (add_dir_entry(fsptr, fssize, parent_dir, parent_inode_offset, file_name, new_inode_offset) != 0) {
+        /* ailed to add dir, unmark the inode in bitmap*/
+        fs_info_block *info_block = (fs_info_block*)fsptr;
+        unsigned char *bitmap = (unsigned char*)offset_to_ptr(fsptr, fssize, info_block->free_inode_bitmap);
+        size_t inode_num = (new_inode_offset - info_block->inode_table) / INODE_SIZE;
+        if (inode_num < MAX_INODES) bitmap[inode_num / 8] &= ~(1 << (inode_num % 8));
+        /*Reset inode*/
+        memset(new_inode, 0, sizeof(inode));
+        free(parent_path);
+        free(file_name);
+        *errnoptr = ENOSPC;
+        return -1;
+    }
 
-      /* Clean up */
-      free(parent_path);
-      free(file_name);
-
-      return 0;
+    /*Clean up*/
+    free(parent_path);
+    free(file_name);
+    
+    /*Success!*/
+    return 0;
 }
 
 /* Implements an emulation of the unlink system call for regular files
@@ -981,122 +985,127 @@ int __myfs_mknod_implem(void *fsptr, size_t fssize, int *errnoptr, const char *p
 
 */
 int __myfs_unlink_implem(void *fsptr, size_t fssize, int *errnoptr, const char *path) {
-      /* Init fs */
-      if (!init_fs(fsptr, fssize)) {
-            *errnoptr = EFAULT;
-            return -1;
-      }
+    /*Init fs*/
+    if (!init_fs(fsptr, fssize)) {
+        *errnoptr = EFAULT;
+        return -1;
+    }
 
-      /* Split path */
-      char *parent_path = NULL;
-      char *file_name = NULL;
-      if (split_path(path, &parent_path, &file_name)) {
-            *errnoptr = EINVAL; 
-            return -1;
-      }
+    /*Split path into parent dir and file name*/
+    char *parent_path = NULL;
+    char *file_name = NULL;
+    if (split_path(path, &parent_path, &file_name)) {
+        *errnoptr = EINVAL; 
+        return -1;
+    }
 
-      /* Find parent dir */
-      size_t parent_inode_offset;
-      inode *parent_dir = find_inode(fsptr, fssize, parent_path, &parent_inode_offset);
-      if (!parent_dir) {
-            free(parent_path);
-            free(file_name);
-            *errnoptr = ENOENT;
-            return -1;
-      }
+    /*Find parent dir*/
+    size_t parent_inode_offset;
+    inode *parent_dir = find_inode(fsptr, fssize, parent_path, &parent_inode_offset);
+    if (!parent_dir) {
+        free(parent_path);
+        free(file_name);
+        *errnoptr = ENOENT;
+        return -1;
+    }
 
-      /* Verify parent is dir */
-      if (!(parent_dir->mode & S_IFDIR)) {
-            free(parent_path);
-            free(file_name);
-            *errnoptr = ENOTDIR;
-            return -1;
-      }
+    /*Verify parent is dir*/
+    if (!(parent_dir->mode & S_IFDIR)) {
+        free(parent_path);
+        free(file_name);
+        *errnoptr = ENOTDIR;
+        return -1;
+    }
 
-      /* Get entries */
-      directory_entry *entries = (directory_entry *)offset_to_ptr(fsptr, fssize, parent_dir->data_block);
-      if (!entries) {
-            free(parent_path);
-            free(file_name);
-            *errnoptr = EIO;
-            return -1;
-      }
+    /*Get entries*/
+    directory_entry *entries = (directory_entry *)offset_to_ptr(fsptr, fssize, parent_dir->data_block);
+    if (!entries) {
+        free(parent_path);
+        free(file_name);
+        *errnoptr = EIO;
+        return -1;
+    }
 
-      size_t num_entries = parent_dir->size / sizeof(directory_entry);
-      size_t target_index = num_entries;
+    /*Get number of entries*/
+    size_t num_entries = parent_dir->size / sizeof(directory_entry);
+    size_t target_index = num_entries;
 
-      /* Find target dir entry */
-      for (size_t i = 0; i < num_entries; i++) {
-            if (!strcmp(entries[i].name, file_name)) {
-                  target_index = i;
-                  break;
-            }
-      }
+    /*Seek target*/
+    for (size_t i = 0; i < num_entries; i++) {
+        if (!strcmp(entries[i].name, file_name)) {
+                target_index = i;
+                break;
+        }
+    }
 
-      /* File does not exist */
-      if (target_index == num_entries) {
-            free(parent_path);
-            free(file_name);
-            *errnoptr = ENOENT;
-            return -1;
-      }
+    /*404, File not found*/
+    if (target_index == num_entries) {
+        free(parent_path);
+        free(file_name);
+        *errnoptr = ENOENT;
+        return -1;
+    }
 
-      /* Get inode offset */
-      size_t target_inode_offset = entries[target_index].inode_offset;
-      inode *target_inode = (inode *)offset_to_ptr(fsptr, fssize, target_inode_offset);
-      if (!target_inode) {
-            free(parent_path);
-            free(file_name);
-            *errnoptr = EIO;
-            return -1;
-      }
+    /*Get offset*/
+    size_t target_inode_offset = entries[target_index].inode_offset;
+    inode *target_inode = (inode *)offset_to_ptr(fsptr, fssize, target_inode_offset);
+    if (!target_inode) {
+        free(parent_path);
+        free(file_name);
+        *errnoptr = EIO;
+        return -1;
+    }
 
-      /* Verify it's a file */
-      if (!(target_inode->mode & S_IFREG)) {
-            free(parent_path);
-            free(file_name);
-            *errnoptr = EISDIR; // Is a directory
-            return -1;
-      }
+    /*Verify it's a file*/
+    if (!(target_inode->mode & S_IFREG)) {
+        free(parent_path);
+        free(file_name);
+        *errnoptr = EISDIR;
+        return -1;
+    }
 
-      /* Remove directory entry */
-      if (remove_dir_entry(fsptr, fssize, parent_dir, parent_inode_offset, file_name)) {
-            free(parent_path);
-            free(file_name);
-            *errnoptr = EIO;
-            return -1;
-      }
+    /*Remove directory entry*/
+    if (remove_dir_entry(fsptr, fssize, parent_dir, parent_inode_offset, file_name)) {
+        free(parent_path);
+        free(file_name);
+        *errnoptr = EIO;
+        return -1;
+    }
 
-      /* Free inode in bitmap */
-      fs_info_block *info_block = (fs_info_block*)fsptr;
-      unsigned char *bitmap = (unsigned char*)offset_to_ptr(fsptr, fssize, info_block->free_inode_bitmap);
-      if (!bitmap) {
-            *errnoptr = EIO; 
-            return -1;
-      }
-      size_t inode_num = (target_inode_offset - info_block->inode_table) / INODE_SIZE;
-      if (inode_num >= MAX_INODES) {
-            *errnoptr = EIO;
-            return -1;
-      }
-      bitmap[inode_num / 8] &= ~(1 << (inode_num % 8));
+    /*Free inode in bitmap*/
+    fs_info_block *info_block = (fs_info_block*)fsptr;
+    /*Git bitmap*/
+    uint8_t *bitmap = (uint8_t*)offset_to_ptr(fsptr, fssize, info_block->free_inode_bitmap);
+    if (!bitmap) {
+        *errnoptr = EIO; 
+        return -1;
+    }
+    /*Get inode number*/
+    size_t inode_num = (target_inode_offset - info_block->inode_table) / INODE_SIZE;
+    /*Inode don't exists*/
+    if (inode_num >= MAX_INODES) {
+        *errnoptr = EIO;
+        return -1;
+    }
 
-      /* Free data blocks if allocated */
-      if (target_inode->data_block) {
-            if (free_data_block(fsptr, fssize, target_inode->data_block) != 0) {
-                  *errnoptr = EIO; 
-                  return -1;
-            }
-      } 
+    /*Unmark inode*/
+    bitmap[inode_num / 8] &= ~(1 << (inode_num % 8));
 
-      /* Reset inode */
-      memset(target_inode, 0, sizeof(inode));
+    /*Free dblock allocated*/
+    if (target_inode->data_block) {
+        if (free_data_block(fsptr, fssize, target_inode->data_block) != 0) {
+                *errnoptr = EIO; 
+                return -1;
+        }
+    } 
 
-      /* Clean up */
-      free(parent_path);
-      free(file_name);
+    /*Set INODE to 0*/
+    memset(target_inode, 0, sizeof(inode));
 
-      return 0;
+    /*Cleanup and ret*/
+    free(parent_path);
+    free(file_name);
+    return 0;
 }
 
 /* Implements an emulation of the rmdir system call on the filesystem 
@@ -1115,13 +1124,13 @@ int __myfs_unlink_implem(void *fsptr, size_t fssize, int *errnoptr, const char *
 
 */
 int __myfs_rmdir_implem(void *fsptr, size_t fssize, int *errnoptr,const char *path) {
-    /* Initialize the filesystem */
+    /*FS Init*/
     if (!init_fs(fsptr, fssize)) {
         *errnoptr = EFAULT;
         return -1;
     }
 
-    /* Split the path into parent directory and directory name */
+    /*Split path into parent dir and dir to rm*/
     char *parent_path = NULL;
     char *dir_name = NULL;
     if (split_path(path, &parent_path, &dir_name) != 0) {
@@ -1129,7 +1138,7 @@ int __myfs_rmdir_implem(void *fsptr, size_t fssize, int *errnoptr,const char *pa
         return -1;
     }
 
-    /* Find the parent directory inode */
+    /*Find parent dir*/
     size_t parent_inode_offset;
     inode *parent_dir = find_inode(fsptr, fssize, parent_path, &parent_inode_offset);
     if (!parent_dir) {
@@ -1139,7 +1148,7 @@ int __myfs_rmdir_implem(void *fsptr, size_t fssize, int *errnoptr,const char *pa
         return -1;
     }
 
-    /* Verify that the parent is a directory */
+    /*Check parent is dir*/
     if (!(parent_dir->mode & S_IFDIR)) {
         free(parent_path);
         free(dir_name);
@@ -1147,7 +1156,7 @@ int __myfs_rmdir_implem(void *fsptr, size_t fssize, int *errnoptr,const char *pa
         return -1;
     }
 
-    /* Find the target directory's inode */
+    /*Get target dir*/
     size_t target_inode_offset;
     inode *target_dir = find_inode(fsptr, fssize, path, &target_inode_offset);
     if (!target_dir) {
@@ -1157,7 +1166,7 @@ int __myfs_rmdir_implem(void *fsptr, size_t fssize, int *errnoptr,const char *pa
         return -1;
     }
 
-    /* Verify that the target is a directory */
+    /*Check if target dir is dir*/
     if (!(target_dir->mode & S_IFDIR)) {
         free(parent_path);
         free(dir_name);
@@ -1165,7 +1174,7 @@ int __myfs_rmdir_implem(void *fsptr, size_t fssize, int *errnoptr,const char *pa
         return -1;
     }
 
-    /* Check if the directory is empty (only contains . and ..) */
+    /*Dir must be empty*/
     size_t num_entries = target_dir->size / sizeof(directory_entry);
     if (num_entries > 2) { // More than . and ..
         free(parent_path);
@@ -1174,7 +1183,7 @@ int __myfs_rmdir_implem(void *fsptr, size_t fssize, int *errnoptr,const char *pa
         return -1;
     }
 
-    /* Optional: Further verify that the only entries are . and .. */
+    /*Check only entries are . and ..*/
     directory_entry *entries = (directory_entry *)offset_to_ptr(fsptr, fssize, target_dir->data_block);
     if (!entries) {
         free(parent_path);
@@ -1184,15 +1193,15 @@ int __myfs_rmdir_implem(void *fsptr, size_t fssize, int *errnoptr,const char *pa
     }
 
     if (num_entries == 1) {
-        /* Should at least contain '.' */
-        if (strcmp(entries[0].name, ".") != 0) {
+        /*First entry must be .*/
+        if (strcmp(entries[0].name, ".")) {
             free(parent_path);
             free(dir_name);
             *errnoptr = ENOTEMPTY;
             return -1;
         }
     } else if (num_entries == 2) {
-        /* Should contain '.' and '..' */
+        /*Check if contains . ..*/
         int has_dot = 0, has_dotdot = 0;
         for (size_t i = 0; i < num_entries; i++) {
             if (strcmp(entries[i].name, ".") == 0) has_dot = 1;
@@ -1206,7 +1215,7 @@ int __myfs_rmdir_implem(void *fsptr, size_t fssize, int *errnoptr,const char *pa
         }
     }
 
-    /* Remove the directory entry from the parent directory */
+    /*We seeked, now we destroy*/
     if (remove_dir_entry(fsptr, fssize, parent_dir, parent_inode_offset, dir_name) != 0) {
         free(parent_path);
         free(dir_name);
@@ -1214,10 +1223,9 @@ int __myfs_rmdir_implem(void *fsptr, size_t fssize, int *errnoptr,const char *pa
         return -1;
     }
 
-    /* Free the target directory's data block */
-    if (target_dir->data_block != 0) {
-        if (free_data_block(fsptr, fssize, target_dir->data_block) != 0) {
-            /* Attempt to rollback by re-adding the directory entry */
+    /*Free dir data blcok*/
+    if (target_dir->data_block) {
+        if (free_data_block(fsptr, fssize, target_dir->data_block)) {
             add_dir_entry(fsptr, fssize, parent_dir, parent_inode_offset, dir_name, target_inode_offset);
             free(parent_path);
             free(dir_name);
@@ -1226,46 +1234,37 @@ int __myfs_rmdir_implem(void *fsptr, size_t fssize, int *errnoptr,const char *pa
         }
     }
 
-    /* Free the target directory's inode in the inode bitmap */
+    /*Free the target directory's inode in the inode bitmap*/
     fs_info_block *info_block = (fs_info_block*)fsptr;
     unsigned char *inode_bitmap = (unsigned char*)offset_to_ptr(fsptr, fssize, info_block->free_inode_bitmap);
     if (!inode_bitmap) {
-        /* Attempt to rollback by re-adding the directory entry and freeing data block */
         add_dir_entry(fsptr, fssize, parent_dir, parent_inode_offset, dir_name, target_inode_offset);
-        if (target_dir->data_block != 0) {
-            // Reallocate the data block if possible
-            // (This would require implementing a function to mark the block as used again)
-            // For simplicity, we skip this step
-        }
         free(parent_path);
         free(dir_name);
         *errnoptr = EIO;
         return -1;
     }
 
+    /*Get numbet of inode*/
     size_t inode_num = (target_inode_offset - info_block->inode_table) / INODE_SIZE;
     if (inode_num >= MAX_INODES) {
-        /* Invalid inode number, attempt to rollback */
         add_dir_entry(fsptr, fssize, parent_dir, parent_inode_offset, dir_name, target_inode_offset);
-        if (target_dir->data_block != 0) {
-            free_data_block(fsptr, fssize, target_dir->data_block);
-        }
+        if (target_dir->data_block) free_data_block(fsptr, fssize, target_dir->data_block);
         free(parent_path);
         free(dir_name);
         *errnoptr = EIO;
         return -1;
     }
 
-    /* Mark the inode as free in the bitmap */
+    /*Mark inode as free*/
     inode_bitmap[inode_num / 8] &= ~(1 << (inode_num % 8));
 
-    /* Reset the inode structure to zero */
+    /*Set inode to 0*/
     memset(target_dir, 0, sizeof(inode));
 
-    /* Clean up */
+    /*Cleanup and ret*/
     free(parent_path);
     free(dir_name);
-
     return 0;
 }
 
@@ -1281,154 +1280,154 @@ int __myfs_rmdir_implem(void *fsptr, size_t fssize, int *errnoptr,const char *pa
    The error codes are documented in man 2 mkdir.
 
 */
-int __myfs_mkdir_implem(void *fsptr, size_t fssize, int *errnoptr,
-                        const char *path) {
-      /* Initialize the filesystem */
-      if (!init_fs(fsptr, fssize)) {
-          *errnoptr = EFAULT;
-          return -1;
-      }
+int __myfs_mkdir_implem(void *fsptr, size_t fssize, int *errnoptr, const char *path) {
+    /*Init FS*/
+    if (!init_fs(fsptr, fssize)) {
+        *errnoptr = EFAULT;
+        return -1;
+    }
 
-      /* Split the path into parent directory and directory name */
-      char *parent_path = NULL;
-      char *dir_name = NULL;
-      if (split_path(path, &parent_path, &dir_name) != 0) {
-          *errnoptr = EINVAL;
-          return -1;
-      }
+    /*Split path into parent and child*/
+    char *parent_path = NULL;
+    char *dir_name = NULL;
+    if (split_path(path, &parent_path, &dir_name) != 0) {
+        *errnoptr = EINVAL;
+        return -1;
+    }
 
-      /* Find the parent directory inode */
-      size_t parent_inode_offset;
-      inode *parent_dir = find_inode(fsptr, fssize, parent_path, &parent_inode_offset);
-      if (!parent_dir) {
-          free(parent_path);
-          free(dir_name);
-          *errnoptr = ENOENT;
-          return -1;
-      }
+    /*Find parent inode*/
+    size_t parent_inode_offset;
+    inode *parent_dir = find_inode(fsptr, fssize, parent_path, &parent_inode_offset);
+    if (!parent_dir) {
+        free(parent_path);
+        free(dir_name);
+        *errnoptr = ENOENT;
+        return -1;
+    }
 
-      /* Verify that the parent is a directory */
-      if (!(parent_dir->mode & S_IFDIR)) {
-          free(parent_path);
-          free(dir_name);
-          *errnoptr = ENOTDIR;
-          return -1;
-      }
+    /*Check if parent is dir*/
+    if (!(parent_dir->mode & S_IFDIR)) {
+        free(parent_path);
+        free(dir_name);
+        *errnoptr = ENOTDIR;
+        return -1;
+    }
 
-      /* Check if the directory already exists */
-      directory_entry *entries = (directory_entry *)offset_to_ptr(fsptr, fssize, parent_dir->data_block);
-      if (!entries) {
-          free(parent_path);
-          free(dir_name);
-          *errnoptr = EIO;
-          return -1;
-      }
+    /*Get entries*/
+    directory_entry *entries = (directory_entry *)offset_to_ptr(fsptr, fssize, parent_dir->data_block);
+    if (!entries) {
+        free(parent_path);
+        free(dir_name);
+        *errnoptr = EIO;
+        return -1;
+    }
 
-      size_t num_entries = parent_dir->size / sizeof(directory_entry);
-      for (size_t i = 0; i < num_entries; i++) {
-          if (!strcmp(entries[i].name, dir_name)) {
-              free(parent_path);
-              free(dir_name);
-              *errnoptr = EEXIST;
-              return -1;
-          }
-      }
+    /*Check if dir exists*/
+    size_t num_entries = parent_dir->size / sizeof(directory_entry);
+    for (size_t i = 0; i < num_entries; i++) {
+        if (!strcmp(entries[i].name, dir_name)) {
+            free(parent_path);
+            free(dir_name);
+            *errnoptr = EEXIST;
+            return -1;
+        }
+    }
 
-      /* Find a free inode for the new directory */
-      size_t new_inode_offset = find_free_inode(fsptr, fssize);
-      if (new_inode_offset == (size_t)-1) {
-          free(parent_path);
-          free(dir_name);
-          *errnoptr = ENOSPC;
-          return -1;
-      }
+    /*Find free inode for new dir*/
+    size_t new_inode_offset = find_free_inode(fsptr, fssize);
+    if (new_inode_offset == (size_t)-1) {
+        free(parent_path);
+        free(dir_name);
+        *errnoptr = ENOSPC;
+        return -1;
+    }
 
-      /* Initialize the new inode */
-      inode *new_dir_inode = (inode *)offset_to_ptr(fsptr, fssize, new_inode_offset);
-      if (!new_dir_inode) {
-          /* Unmark the inode in bitmap */
-          fs_info_block *info_block = (fs_info_block*)fsptr;
-          unsigned char *bitmap = (unsigned char*)offset_to_ptr(fsptr, fssize, info_block->free_inode_bitmap);
-          size_t inode_num = (new_inode_offset - info_block->inode_table) / INODE_SIZE;
-          if (inode_num < MAX_INODES) bitmap[inode_num / 8] &= ~(1 << (inode_num % 8));
-          free(parent_path);
-          free(dir_name);
-          *errnoptr = EIO;
-          return -1;
-      }
+    /*New iNode, 'init?*/
+    inode *new_dir_inode = (inode *)offset_to_ptr(fsptr, fssize, new_inode_offset);
+    if (!new_dir_inode) {
+        /*Unmark inode in bitmap*/
+        fs_info_block *info_block = (fs_info_block*)fsptr;
+        uint8_t *bitmap = (uint8_t*)offset_to_ptr(fsptr, fssize, info_block->free_inode_bitmap);
+        size_t inode_num = (new_inode_offset - info_block->inode_table) / INODE_SIZE;
+        if (inode_num < MAX_INODES) bitmap[inode_num / 8] &= ~(1 << (inode_num % 8));
+        free(parent_path);
+        free(dir_name);
+        *errnoptr = EIO;
+        return -1;
+    }
 
-      /* Allocate a data block for the new directory */
-      size_t data_block_offset = find_free_data_block(fsptr, fssize);
-      if (data_block_offset == (size_t)-1) {
-          /* Unmark the inode in bitmap */
-          fs_info_block *info_block = (fs_info_block*)fsptr;
-          unsigned char *bitmap = (unsigned char*)offset_to_ptr(fsptr, fssize, info_block->free_inode_bitmap);
-          size_t inode_num = (new_inode_offset - info_block->inode_table) / INODE_SIZE;
-          if (inode_num < MAX_INODES) bitmap[inode_num / 8] &= ~(1 << (inode_num % 8));
-          /* Reset the inode */
-          memset(new_dir_inode, 0, sizeof(inode));
-          free(parent_path);
-          free(dir_name);
-          *errnoptr = ENOSPC;
-          return -1;
-      }
+    /*Get data block for new dir*/
+    size_t data_block_offset = find_free_data_block(fsptr, fssize);
+    if (data_block_offset == (size_t)-1) {
+        /*Unmark inode in bitmap*/
+        fs_info_block *info_block = (fs_info_block*)fsptr;
+        unsigned char *bitmap = (unsigned char*)offset_to_ptr(fsptr, fssize, info_block->free_inode_bitmap);
+        size_t inode_num = (new_inode_offset - info_block->inode_table) / INODE_SIZE;
+        if (inode_num < MAX_INODES) bitmap[inode_num / 8] &= ~(1 << (inode_num % 8));
+        /*Reset inode*/
+        memset(new_dir_inode, 0, sizeof(inode));
+        free(parent_path);
+        free(dir_name);
+        *errnoptr = ENOSPC;
+        return -1;
+    }
 
-      /* Initialize the new directory inode */
-      new_dir_inode->mode = S_IFDIR | 0755;
-      new_dir_inode->uid = getuid();
-      new_dir_inode->gid = getgid();
-      new_dir_inode->size = 0;
-      new_dir_inode->access_time = new_dir_inode->modification_time = new_dir_inode->change_time = time(NULL);
-      new_dir_inode->data_block = data_block_offset;
+    /*Fill up new dir iNode*/
+    new_dir_inode->mode = S_IFDIR | 0755;
+    new_dir_inode->uid = getuid();
+    new_dir_inode->gid = getgid();
+    new_dir_inode->size = 0;
+    new_dir_inode->access_time = new_dir_inode->modification_time = new_dir_inode->change_time = time(NULL);
+    new_dir_inode->data_block = data_block_offset;
 
-      /* Initialize the new directory entries (add "." and "..") */
-      directory_entry *new_dir_entries = (directory_entry *)offset_to_ptr(fsptr, fssize, data_block_offset);
-      if (!new_dir_entries) {
-          /* Free the data block */
-          free_data_block(fsptr, fssize, data_block_offset);
-          /* Unmark the inode in bitmap */
-          fs_info_block *info_block = (fs_info_block*)fsptr;
-          unsigned char *bitmap = (unsigned char*)offset_to_ptr(fsptr, fssize, info_block->free_inode_bitmap);
-          size_t inode_num = (new_inode_offset - info_block->inode_table) / INODE_SIZE;
-          if (inode_num < MAX_INODES) bitmap[inode_num / 8] &= ~(1 << (inode_num % 8));
-          /* Reset the inode */
-          memset(new_dir_inode, 0, sizeof(inode));
-          free(parent_path);
-          free(dir_name);
-          *errnoptr = EIO;
-          return -1;
-      }
+    /*Init new entries(add "." and "..")*/
+    directory_entry *new_dir_entries = (directory_entry *)offset_to_ptr(fsptr, fssize, data_block_offset);
+    if (!new_dir_entries) {
+        /*Free data block*/
+        free_data_block(fsptr, fssize, data_block_offset);
+        /*Unmark inode in bitmap*/
+        fs_info_block *info_block = (fs_info_block*)fsptr;
+        uint8_t *bitmap = (uint8_t*)offset_to_ptr(fsptr, fssize, info_block->free_inode_bitmap);
+        size_t inode_num = (new_inode_offset - info_block->inode_table) / INODE_SIZE;
+        if (inode_num < MAX_INODES) bitmap[inode_num / 8] &= ~(1 << (inode_num % 8));
+        /* Reset the inode */
+        memset(new_dir_inode, 0, sizeof(inode));
+        free(parent_path);
+        free(dir_name);
+        *errnoptr = EIO;
+        return -1;
+    }
 
-      /* Add "." */
-      strcpy(new_dir_entries[0].name, ".");
-      new_dir_entries[0].inode_offset = new_inode_offset;
-      /* Add ".." */
-      strcpy(new_dir_entries[1].name, "..");
-      new_dir_entries[1].inode_offset = parent_inode_offset;
-      new_dir_inode->size += 2 * sizeof(directory_entry);
+    /*Add .*/
+    strcpy(new_dir_entries[0].name, ".");
+    new_dir_entries[0].inode_offset = new_inode_offset;
+    /*Add ..*/
+    strcpy(new_dir_entries[1].name, "..");
+    new_dir_entries[1].inode_offset = parent_inode_offset;
+    new_dir_inode->size += 2 * sizeof(directory_entry);
 
-      /* Add the new directory to the parent directory */
-      if (add_dir_entry(fsptr, fssize, parent_dir, parent_inode_offset, dir_name, new_inode_offset) != 0) {
-          /* Free the data block */
-          free_data_block(fsptr, fssize, data_block_offset);
-          /* Unmark the inode in bitmap */
-          fs_info_block *info_block = (fs_info_block*)fsptr;
-          unsigned char *bitmap = (unsigned char*)offset_to_ptr(fsptr, fssize, info_block->free_inode_bitmap);
-          size_t inode_num = (new_inode_offset - info_block->inode_table) / INODE_SIZE;
-          if (inode_num < MAX_INODES) bitmap[inode_num / 8] &= ~(1 << (inode_num % 8));
-          /* Reset the inode */
-          memset(new_dir_inode, 0, sizeof(inode));
-          free(parent_path);
-          free(dir_name);
-          *errnoptr = ENOSPC;
-          return -1;
-      }
+    /*Add new dir to parent*/
+    if (add_dir_entry(fsptr, fssize, parent_dir, parent_inode_offset, dir_name, new_inode_offset) != 0) {
+        /*Free data block*/
+        free_data_block(fsptr, fssize, data_block_offset);
+        /*Unmark inode in bitmap*/
+        fs_info_block *info_block = (fs_info_block*)fsptr;
+        uint8_t *bitmap = (uint8_t*)offset_to_ptr(fsptr, fssize, info_block->free_inode_bitmap);
+        size_t inode_num = (new_inode_offset - info_block->inode_table) / INODE_SIZE;
+        if (inode_num < MAX_INODES) bitmap[inode_num / 8] &= ~(1 << (inode_num % 8));
+        /*Reset inode*/
+        memset(new_dir_inode, 0, sizeof(inode));
+        free(parent_path);
+        free(dir_name);
+        *errnoptr = ENOSPC;
+        return -1;
+    }
 
-      /* Cleanup */
-      free(parent_path);
-      free(dir_name);
+    /*Cleanup and return*/
+    free(parent_path);
+    free(dir_name);
 
-      return 0;
+    return 0;
 }
 
 /* Implements an emulation of the rename system call on the filesystem 
@@ -1447,38 +1446,38 @@ int __myfs_mkdir_implem(void *fsptr, size_t fssize, int *errnoptr,
    The error codes are documented in man 2 rename.
 
 */
-int __myfs_rename_implem(void *fsptr, size_t fssize, int *errnoptr,
-                         const char *from, const char *to) {
-    /* Initialize the filesystem */
+int __myfs_rename_implem(void *fsptr, size_t fssize, int *errnoptr, const char *from, const char *to) {
+    /*Init FS*/
     if (!init_fs(fsptr, fssize)) {
         *errnoptr = EFAULT;
         return -1;
     }
 
-    /* Prevent renaming the root directory */
+    /*CCan't rename root*/
     if (strcmp(from, "/") == 0) {
         *errnoptr = EBUSY;
         return -1;
     }
 
-    /* Split the 'from' and 'to' paths into parent directories and base names */
+    /*Split from name into parent and child*/
     char *from_parent_path = NULL;
     char *from_base_name = NULL;
-    if (split_path(from, &from_parent_path, &from_base_name) != 0) {
+    if (split_path(from, &from_parent_path, &from_base_name)) {
         *errnoptr = EINVAL;
         return -1;
     }
 
+    /*Split to name into parent and child*/
     char *to_parent_path = NULL;
     char *to_base_name = NULL;
-    if (split_path(to, &to_parent_path, &to_base_name) != 0) {
+    if (split_path(to, &to_parent_path, &to_base_name)) {
         free(from_parent_path);
         free(from_base_name);
         *errnoptr = EINVAL;
         return -1;
     }
 
-    /* Find the 'from' parent directory inode */
+    /*Find from parent inode*/
     size_t from_parent_inode_offset;
     inode *from_parent_dir = find_inode(fsptr, fssize, from_parent_path, &from_parent_inode_offset);
     if (!from_parent_dir) {
@@ -1490,7 +1489,7 @@ int __myfs_rename_implem(void *fsptr, size_t fssize, int *errnoptr,
         return -1;
     }
 
-    /* Verify that the 'from' parent is a directory */
+    /*CHeck from parent is a*/
     if (!(from_parent_dir->mode & S_IFDIR)) {
         free(from_parent_path);
         free(from_base_name);
@@ -1500,7 +1499,7 @@ int __myfs_rename_implem(void *fsptr, size_t fssize, int *errnoptr,
         return -1;
     }
 
-    /* Find the target inode to be renamed */
+    /*Find target inode to reanme*/
     size_t from_inode_offset;
     inode *from_inode = find_inode(fsptr, fssize, from, &from_inode_offset);
     if (!from_inode) {
@@ -1512,14 +1511,7 @@ int __myfs_rename_implem(void *fsptr, size_t fssize, int *errnoptr,
         return -1;
     }
 
-    /* Ensure that 'from' is not a parent of 'to' to prevent directory loops */
-    if (from_inode->mode & S_IFDIR) {
-        // Implement a function to check if 'to' is a subdirectory of 'from'
-        // This function is not currently implemented, so we'll skip it for now
-        // You can add it later for robustness
-    }
-
-    /* Find the 'to' parent directory inode */
+    /*Find to parent dir inode*/
     size_t to_parent_inode_offset;
     inode *to_parent_dir = find_inode(fsptr, fssize, to_parent_path, &to_parent_inode_offset);
     if (!to_parent_dir) {
@@ -1531,7 +1523,7 @@ int __myfs_rename_implem(void *fsptr, size_t fssize, int *errnoptr,
         return -1;
     }
 
-    /* Verify that the 'to' parent is a directory */
+    /*Check to parent is dir*/
     if (!(to_parent_dir->mode & S_IFDIR)) {
         free(from_parent_path);
         free(from_base_name);
@@ -1541,13 +1533,12 @@ int __myfs_rename_implem(void *fsptr, size_t fssize, int *errnoptr,
         return -1;
     }
 
-    /* Check if the 'to' path already exists */
+    /*Check to path's existance*/
     size_t to_inode_offset;
     inode *to_inode = find_inode(fsptr, fssize, to, &to_inode_offset);
     if (to_inode) {
-        /* 'to' path exists; handle according to the type */
         if (to_inode->mode & S_IFDIR) {
-            /* If 'to' is a directory, 'from' must also be a directory and 'to' must be empty */
+            /*To is dir and empty, and from is dir*/
             if (!(from_inode->mode & S_IFDIR)) {
                 free(from_parent_path);
                 free(from_base_name);
@@ -1557,8 +1548,9 @@ int __myfs_rename_implem(void *fsptr, size_t fssize, int *errnoptr,
                 return -1;
             }
 
+            /*Check to is empty*/
             size_t to_num_entries = to_inode->size / sizeof(directory_entry);
-            if (to_num_entries > 2) { // More than '.' and '..'
+            if (to_num_entries > 2) {
                 free(from_parent_path);
                 free(from_base_name);
                 free(to_parent_path);
@@ -1567,7 +1559,7 @@ int __myfs_rename_implem(void *fsptr, size_t fssize, int *errnoptr,
                 return -1;
             }
 
-            /* Optional: Further verify that the only entries are '.' and '..' */
+            /*Verify only entries are dot and dotdot*/
             directory_entry *to_entries = (directory_entry *)offset_to_ptr(fsptr, fssize, to_inode->data_block);
             if (!to_entries) {
                 free(from_parent_path);
@@ -1578,8 +1570,8 @@ int __myfs_rename_implem(void *fsptr, size_t fssize, int *errnoptr,
                 return -1;
             }
 
+            /*At least contains .*/
             if (to_num_entries == 1) {
-                /* Should at least contain '.' */
                 if (strcmp(to_entries[0].name, ".") != 0) {
                     free(from_parent_path);
                     free(from_base_name);
@@ -1588,8 +1580,8 @@ int __myfs_rename_implem(void *fsptr, size_t fssize, int *errnoptr,
                     *errnoptr = ENOTEMPTY;
                     return -1;
                 }
+            /*At least . and ..*/
             } else if (to_num_entries == 2) {
-                /* Should contain '.' and '..' */
                 int has_dot = 0, has_dotdot = 0;
                 for (size_t i = 0; i < to_num_entries; i++) {
                     if (strcmp(to_entries[i].name, ".") == 0) has_dot = 1;
@@ -1605,12 +1597,8 @@ int __myfs_rename_implem(void *fsptr, size_t fssize, int *errnoptr,
                 }
             }
 
-            /* Optionally, you could implement recursive rename if desired */
-            /* For simplicity, we do not allow overwriting non-empty directories */
-
-            /* Remove the 'to' directory (must be empty) */
-            if (__myfs_rmdir_implem(fsptr, fssize, errnoptr, to) != 0) {
-                // 'to' exists but could not be removed
+            /*Remove to dir*/
+            if (__myfs_rmdir_implem(fsptr, fssize, errnoptr, to)) {
                 free(from_parent_path);
                 free(from_base_name);
                 free(to_parent_path);
@@ -1618,9 +1606,9 @@ int __myfs_rename_implem(void *fsptr, size_t fssize, int *errnoptr,
                 return -1;
             }
         } else {
-            /* 'to' is a file; unlink it to allow overwriting */
-            if (__myfs_unlink_implem(fsptr, fssize, errnoptr, to) != 0) {
-                // Could not unlink existing 'to' file
+            /*to is file. Unlink*/
+            /*Can't unlink*/
+            if (__myfs_unlink_implem(fsptr, fssize, errnoptr, to)) {
                 free(from_parent_path);
                 free(from_base_name);
                 free(to_parent_path);
@@ -1630,8 +1618,8 @@ int __myfs_rename_implem(void *fsptr, size_t fssize, int *errnoptr,
         }
     }
 
-    /* Remove the directory entry from the 'from' parent directory */
-    if (remove_dir_entry(fsptr, fssize, from_parent_dir, from_parent_inode_offset, from_base_name) != 0) {
+    /* Rm dir entry from the from parent dir*/
+    if (remove_dir_entry(fsptr, fssize, from_parent_dir, from_parent_inode_offset, from_base_name)) {
         free(from_parent_path);
         free(from_base_name);
         free(to_parent_path);
@@ -1640,9 +1628,8 @@ int __myfs_rename_implem(void *fsptr, size_t fssize, int *errnoptr,
         return -1;
     }
 
-    /* Add the directory entry to the 'to' parent directory */
-    if (add_dir_entry(fsptr, fssize, to_parent_dir, to_parent_inode_offset, to_base_name, from_inode_offset) != 0) {
-        /* Attempt to rollback by re-adding the original directory entry */
+    /*Add dir entry to to parent dir*/
+    if (add_dir_entry(fsptr, fssize, to_parent_dir, to_parent_inode_offset, to_base_name, from_inode_offset)) {
         add_dir_entry(fsptr, fssize, from_parent_dir, from_parent_inode_offset, from_base_name, from_inode_offset);
         free(from_parent_path);
         free(from_base_name);
@@ -1652,15 +1639,11 @@ int __myfs_rename_implem(void *fsptr, size_t fssize, int *errnoptr,
         return -1;
     }
 
-    /* Update inode metadata if necessary */
-    // Optionally, you can update the inode's parent directory or other metadata here
-
-    /* Clean up */
+    /*Cleanup and ret*/
     free(from_parent_path);
     free(from_base_name);
     free(to_parent_path);
     free(to_base_name);
-
     return 0;
 }
 
@@ -1680,21 +1663,20 @@ int __myfs_rename_implem(void *fsptr, size_t fssize, int *errnoptr,
    The error codes are documented in man 2 truncate.
 
 */
-int __myfs_truncate_implem(void *fsptr, size_t fssize, int *errnoptr,
-                           const char *path, off_t offset) {
-    /* Initialize the filesystem */
+int __myfs_truncate_implem(void *fsptr, size_t fssize, int *errnoptr, const char *path, off_t offset) {
+    /*Init FS*/
     if (!init_fs(fsptr, fssize)) {
         *errnoptr = EFAULT;
         return -1;
     }
 
-    /* Validate the offset */
+    /*Bad offset*/
     if (offset < 0) {
         *errnoptr = EINVAL;
         return -1;
     }
 
-    /* Find the inode corresponding to the path */
+    /*Find inode for path*/
     size_t inode_offset;
     inode *file_inode = find_inode(fsptr, fssize, path, &inode_offset);
     if (!file_inode) {
@@ -1702,132 +1684,131 @@ int __myfs_truncate_implem(void *fsptr, size_t fssize, int *errnoptr,
         return -1;
     }
 
-    /* Verify that the inode represents a regular file */
+    /*Not a file */
     if (!(file_inode->mode & S_IFREG)) {
         *errnoptr = EINVAL;
         return -1;
     }
 
-    /* Truncate to a smaller size */
+    /*Truncate*/
     if (offset < file_inode->size) {
-        if (offset == 0) {
-            /* Truncate the file to zero size: free the data block */
-            if (file_inode->data_block != 0) {
-                if (free_data_block(fsptr, fssize, file_inode->data_block) != 0) {
+        if (!offset) {
+            /*Truncate file to zero size by freeing data block*/
+            if (file_inode->data_block) {
+                if (free_data_block(fsptr, fssize, file_inode->data_block)) {
                     *errnoptr = EIO;
                     return -1;
                 }
                 file_inode->data_block = 0;
             }
         } else {
-            /* Truncate within the existing data block */
-            if (file_inode->data_block == 0) {
-                /* No data block allocated, nothing to truncate */
-                /* This is an inconsistency; handle as an I/O error */
+            /*Truncate existing dblock*/
+            if (!file_inode->data_block) {
                 *errnoptr = EIO;
                 return -1;
             }
 
-            /* Ensure the offset does not exceed block size */
+            /*Ccheck offset is<BLOCK_SIZE*/
             if ((size_t)offset > BLOCK_SIZE) {
-                *errnoptr = EFBIG; // File too large
+                *errnoptr = EFBIG;
                 return -1;
             }
 
-            /* Optionally, zero out the bytes beyond the new size */
+            /*Get offset to datablock*/
             void *data_ptr = offset_to_ptr(fsptr, fssize, file_inode->data_block + offset);
             if (!data_ptr) {
                 *errnoptr = EIO;
                 return -1;
             }
+
+            /*Zero fill bytes*/
             size_t bytes_to_zero = file_inode->size - offset;
             memset(data_ptr, 0, bytes_to_zero);
         }
 
-        /* Update the inode's size */
+        /*Update inode size*/
         file_inode->size = offset;
-        /* Update metadata */
+        /*Time to update the time*/
         file_inode->modification_time = file_inode->change_time = time(NULL);
 
         return 0;
     }
 
-    /* Truncate to a larger size */
+    /*Truncate to bigger size*/
     if (offset > file_inode->size) {
-        /* Check if the new size exceeds the maximum allowed size (BLOCK_SIZE) */
+        /*File is too big*/
         if ((size_t)offset > BLOCK_SIZE) {
-            *errnoptr = EFBIG; // File too large
+            *errnoptr = EFBIG;
             return -1;
         }
 
-        /* Allocate a data block if not already allocated */
-        if (file_inode->data_block == 0) {
+        /*Allocate dblock*/
+        if (!file_inode->data_block) {
             size_t data_block_offset = find_free_data_block(fsptr, fssize);
             if (data_block_offset == (size_t)-1) {
                 *errnoptr = ENOSPC;
                 return -1;
             }
 
-            /* Mark the data block as used in the bitmap */
+            /*Mark the dblock as used*/
             fs_info_block *info_block = (fs_info_block*)fsptr;
-            unsigned char *data_bitmap = (unsigned char*)offset_to_ptr(fsptr, fssize, info_block->free_block_bitmap);
+            uint8_t *data_bitmap = (u_int8_tint*)offset_to_ptr(fsptr, fssize, info_block->free_block_bitmap);
             if (data_bitmap) {
                 size_t block_num = (data_block_offset - info_block->data_blocks) / BLOCK_SIZE;
                 if (block_num >= MAX_DATA_BLOCKS) {
-                    /* Invalid data block number */
                     free_data_block(fsptr, fssize, data_block_offset);
                     *errnoptr = EIO;
                     return -1;
                 }
                 data_bitmap[block_num / 8] |= (1 << (block_num % 8));
             } else {
-                /* Unable to access the data block bitmap */
+                /*Unable to access dblock bitmap*/
                 free_data_block(fsptr, fssize, data_block_offset);
                 *errnoptr = EIO;
                 return -1;
             }
 
-            /* Initialize the data block to zero */
+            /*Init the dblock*/
             void *data_ptr = offset_to_ptr(fsptr, fssize, data_block_offset);
             if (!data_ptr) {
-                /* Unable to access the data block */
                 free_data_block(fsptr, fssize, data_block_offset);
                 *errnoptr = EIO;
                 return -1;
             }
+
+            /*Zero fill the block*/
             memset(data_ptr, 0, BLOCK_SIZE);
 
-            /* Assign the data block to the inode */
+            /*Assign dblock to inode*/
             file_inode->data_block = data_block_offset;
         }
 
-        /* Get a pointer to the data block */
+        /*Get pointer to dblock*/
         void *data_ptr = offset_to_ptr(fsptr, fssize, file_inode->data_block);
         if (!data_ptr) {
             *errnoptr = EIO;
             return -1;
         }
 
-        /* Calculate the number of bytes to zero-fill */
+        /*Get num bytes to 0 fill*/
         size_t bytes_to_zero = offset - file_inode->size;
         if ((size_t)offset > BLOCK_SIZE) {
-            /* Exceeds block size */
             *errnoptr = EFBIG;
             return -1;
         }
 
-        /* Zero-fill the extending bytes */
+        /*0 fill ext bytes*/
         memset((char*)data_ptr + file_inode->size, 0, bytes_to_zero);
 
-        /* Update the inode's size */
+        /*Update size*/
         file_inode->size = offset;
-        /* Update metadata */
+        /*Update time*/
         file_inode->modification_time = file_inode->change_time = time(NULL);
-
+        /*All good*/
         return 0;
     }
 
-    /* No change in size; nothing to do */
+    /*Nothing to do, nothing to see, so everything's wrong with taking the backstreets*/
     return 0;
 }
 
@@ -1858,45 +1839,43 @@ int __myfs_truncate_implem(void *fsptr, size_t fssize, int *errnoptr,
    The error codes are documented in man 2 open.
 
 */
-int __myfs_open_implem(void *fsptr, size_t fssize, int *errnoptr,
-                       const char *path) {
-    /* Step 1: Initialize the filesystem */
+int __myfs_open_implem(void *fsptr, size_t fssize, int *errnoptr, const char *path) {
+    /*Init FS*/
     if (!init_fs(fsptr, fssize)) {
         *errnoptr = EFAULT;
         return -1;
     }
 
-    /* Step 2: Validate the input path */
-    if (path == NULL || strlen(path) == 0) {
-        *errnoptr = EINVAL; // Invalid argument
+    /*Check path input */
+    if (!path ||!strlen(path)) {
+        *errnoptr = EINVAL;
         return -1;
     }
 
-    /* Step 3: Find the inode corresponding to the path */
+    /*searching dor inode*/
     size_t inode_offset;
     inode *file_inode = find_inode(fsptr, fssize, path, &inode_offset);
     if (!file_inode) {
-        *errnoptr = ENOENT; // No such file or directory
+        *errnoptr = ENOENT;
         return -1;
     }
 
-    /* Example Check for Directory Integrity */
+    /*Check dir integrity*/
     if (file_inode->mode & S_IFDIR) {
         directory_entry *entries = (directory_entry *)offset_to_ptr(fsptr, fssize, file_inode->data_block);
         if (!entries) {
-            *errnoptr = EIO; // I/O error
+            *errnoptr = EIO; 
             return -1;
         }
 
         size_t num_entries = file_inode->size / sizeof(directory_entry);
-        if (num_entries < 2) { // At least '.' and '..' should exist
-            *errnoptr = EIO; // I/O error
+        if (num_entries < 2) {
+            *errnoptr = EIO; 
             return -1;
         }
-
-        // Further integrity checks can be added here as needed
     }
 
+    /*All good*/
     return 0;
 }
 
@@ -1915,70 +1894,68 @@ int __myfs_open_implem(void *fsptr, size_t fssize, int *errnoptr,
    The error codes are documented in man 2 read.
 
 */
-int __myfs_read_implem(void *fsptr, size_t fssize, int *errnoptr,
-                       const char *path, char *buf, size_t size, off_t offset) {
-    /* Step 1: Initialize the filesystem */
+int __myfs_read_implem(void *fsptr, size_t fssize, int *errnoptr, const char *path, char *buf, size_t size, off_t offset) {
+    /*Init fs*/
     if (!init_fs(fsptr, fssize)) {
-        *errnoptr = EFAULT; // Bad address
+        *errnoptr = EFAULT; 
         return -1;
     }
 
-    /* Step 2: Validate the input path and buffer */
-    if (path == NULL || buf == NULL) {
-        *errnoptr = EINVAL; // Invalid argument
+    /*Check path and buff*/
+    if (!path || !buf) {
+        *errnoptr = EINVAL;
         return -1;
     }
 
-    /* Step 3: Find the inode corresponding to the path */
+    /*Find inode for path*/
     size_t inode_offset;
     inode *file_inode = find_inode(fsptr, fssize, path, &inode_offset);
     if (!file_inode) {
-        *errnoptr = ENOENT; // No such file or directory
+        *errnoptr = ENOENT;
         return -1;
     }
 
-    /* Step 4: Verify that the inode represents a regular file */
+    /*Check inode is file*/
     if (!(file_inode->mode & S_IFREG)) {
-        *errnoptr = EINVAL; // Invalid argument
+        *errnoptr = EINVAL;
         return -1;
     }
 
-    /* Step 5: Handle reading beyond the end of the file */
+    /*Handle beyond EOF*/
     if (offset >= (off_t)file_inode->size) {
-        return 0; // EOF
+        return 0;
     }
 
-    /* Step 6: Calculate the number of bytes to read */
+    /*Check bytes to read*/
     size_t bytes_available = file_inode->size - offset;
     size_t bytes_to_read = (size < bytes_available) ? size : bytes_available;
 
-    /* Step 7: Check if the file has a data block allocated */
-    if (file_inode->data_block == 0) {
-        /* No data block allocated; nothing to read */
-        *errnoptr = EIO; // I/O error
+    /*Check file has dblockk alloc'd*/
+    if (!file_inode->data_block) {
+        *errnoptr = EIO;
         return -1;
     }
 
-    /* Step 8: Ensure the offset does not exceed block size */
+    /*Check offset not bigger than block size*/
     if ((size_t)offset > BLOCK_SIZE) {
-        *errnoptr = EINVAL; // Invalid argument
+        *errnoptr = EINVAL;
         return -1;
     }
 
-    /* Step 9: Get a pointer to the data block at the specified offset */
+    /*Get ptr to dblock at specified offset*/
     void *data_ptr = offset_to_ptr(fsptr, fssize, file_inode->data_block + offset);
     if (!data_ptr) {
-        *errnoptr = EIO; // I/O error
+        *errnoptr = EIO;
         return -1;
     }
 
-    /* Step 10: Copy the data into the user-provided buffer */
+    /*Copy data into user-provided buffer*/
     memcpy(buf, data_ptr, bytes_to_read);
 
-    /* Step 11: Update the inode's access time */
+    /*Update inode's access time*/
     file_inode->access_time = time(NULL);
 
-    /* Step 12: Return the number of bytes read */
+    /*Ret byts read*/
     return (int)bytes_to_read;
 }
 
@@ -1998,59 +1975,58 @@ int __myfs_read_implem(void *fsptr, size_t fssize, int *errnoptr,
 
 */
 int __myfs_write_implem(void *fsptr, size_t fssize, int *errnoptr, const char *path, const char *buf, size_t size, off_t offset) {
-      /* Init fs */
-      if (!init_fs(fsptr, fssize)) {
-            *errnoptr = EFAULT; 
-            return -1;
-      }
+    /*Init fs*/
+    if (!init_fs(fsptr, fssize)) {
+        *errnoptr = EFAULT; 
+        return -1;
+    }
 
-      /* Find file inode */
-      size_t inode_offset;
-      inode *file_inode = find_inode(fsptr, fssize, path, &inode_offset);
-      if (!file_inode) {
-            *errnoptr = ENOENT;
-            return -1;
-      }
+    /*Find file inode*/
+    size_t inode_offset;
+    inode *file_inode = find_inode(fsptr, fssize, path, &inode_offset);
+    if (!file_inode) {
+        *errnoptr = ENOENT;
+        return -1;
+    }
 
-      /* Check if file */
-      if (!(file_inode->mode & S_IFREG)) {
-            *errnoptr = EINVAL; 
-            return -1;
-      }
+    /*Check if file*/
+    if (!(file_inode->mode & S_IFREG)) {
+        *errnoptr = EINVAL; 
+        return -1;
+    }
 
-      /* Allocate data block if not already allocated */
-      if (file_inode->data_block == 0) {
-            size_t data_block_offset = find_free_data_block(fsptr, fssize);
-            if (data_block_offset == (size_t)-1) {
-                  *errnoptr = ENOSPC;
-                  return -1;
-            }
-            file_inode->data_block = data_block_offset;
-      }
+    /*Alloc dblock*/
+    if (file_inode->data_block == 0) {
+        size_t data_block_offset = find_free_data_block(fsptr, fssize);
+        if (data_block_offset == (size_t)-1) {
+                *errnoptr = ENOSPC;
+                return -1;
+        }
+        file_inode->data_block = data_block_offset;
+    }
 
-      /* Write into data block */
-      void *data_ptr = offset_to_ptr(fsptr, fssize, file_inode->data_block + offset);
-      if (!data_ptr) {
-            *errnoptr = EIO;
-            return -1;
-      }
+    /*Get offset to dblock*/
+    void *data_ptr = offset_to_ptr(fsptr, fssize, file_inode->data_block + offset);
+    if (!data_ptr) {
+        *errnoptr = EIO;
+        return -1;
+    }
 
-      /* Check if write exceeds block size */
-      if (offset + size > BLOCK_SIZE) {
-            *errnoptr = EFBIG; // File too large
-            return -1;
-      }
+    /*Check if write > block size*/
+    if (offset + size > BLOCK_SIZE) {
+        *errnoptr = EFBIG; // File too large
+        return -1;
+    }
 
-      /* Perform the write */
-      memcpy(data_ptr, buf, size);
+    /*Write to buf*/
+    memcpy(data_ptr, buf, size);
 
-      /* Update metadata */
-      if (offset + size > file_inode->size) {
-            file_inode->size = offset + size;
-      }
-      file_inode->modification_time = file_inode->change_time = time(NULL);
+    /*Update metadata*/
+    if (offset + size > file_inode->size) file_inode->size = offset + size;
+    file_inode->modification_time = file_inode->change_time = time(NULL);
 
-      return size;
+    /*Return bytes written*/
+    return size;
 }
 
 
@@ -2067,54 +2043,53 @@ int __myfs_write_implem(void *fsptr, size_t fssize, int *errnoptr, const char *p
    The error codes are documented in man 2 utimensat.
 
 */
-int __myfs_utimens_implem(void *fsptr, size_t fssize, int *errnoptr,
-                          const char *path, const struct timespec ts[2]) {
-    /* Step 1: Initialize the filesystem */
+int __myfs_utimens_implem(void *fsptr, size_t fssize, int *errnoptr, const char *path, const struct timespec ts[2]) {
+    /*Init FS*/
     if (!init_fs(fsptr, fssize)) {
-        *errnoptr = EFAULT; // Bad address
+        *errnoptr = EFAULT;
         return -1;
     }
 
-    /* Step 2: Validate the input path */
-    if (path == NULL || strlen(path) == 0) {
-        *errnoptr = EINVAL; // Invalid argument
+    /*Check path*/
+    if (!path|| !strlen(path)) {
+        *errnoptr = EINVAL;
         return -1;
     }
 
-    /* Step 3: Find the inode corresponding to the path */
+    /*Find inode for path*/
     size_t inode_offset;
     inode *file_inode = find_inode(fsptr, fssize, path, &inode_offset);
     if (!file_inode) {
-        *errnoptr = ENOENT; // No such file or directory
+        *errnoptr = ENOENT;
         return -1;
     }
 
-    /* Step 4: Update the access and modification times */
+    /*update acces and mod times*/
     time_t new_access_time;
     time_t new_modification_time;
 
-    if (ts == NULL) {
-        /* If ts is NULL, set both times to current time */
+    /*Ts is null, assign curr time*/
+    if (!ts) {
         new_access_time = new_modification_time = time(NULL);
     } else {
-        /* Otherwise, set times based on ts array */
+        /*Set times vased on array*/
         new_access_time = ts[0].tv_sec;
         new_modification_time = ts[1].tv_sec;
 
-        /* Validate the times */
+        /*Check times*/
         if ((ts[0].tv_nsec < 0 || ts[0].tv_nsec >= 1000000000) ||
             (ts[1].tv_nsec < 0 || ts[1].tv_nsec >= 1000000000)) {
-            *errnoptr = EINVAL; // Invalid timespec
+            *errnoptr = EINVAL;
             return -1;
         }
     }
 
-    /* Step 5: Update the inode's times */
+    /*Update times*/
     file_inode->access_time = new_access_time;
     file_inode->modification_time = new_modification_time;
     file_inode->change_time = time(NULL); 
 
-    /* Step 6: Success */
+    /*Success*/
     return 0;
 }
 
@@ -2131,8 +2106,7 @@ int __myfs_utimens_implem(void *fsptr, size_t fssize, int *errnoptr,
    The error codes are documented in man 2 statfs.
 
    Essentially, only the following fields of struct statvfs need to be
-   supported:
-__myfs_utimens_implem
+   supported:__myfs_utimens_implem
    f_bsize   fill with what you call a block (typically 1024 bytes)
    f_blocks  fill with the total number of blocks in the filesystem
    f_bfree   fill with the free number of blocks in the filesystem
@@ -2141,42 +2115,30 @@ __myfs_utimens_implem
              filesystem has such a maximum
 
 */
-int __myfs_statfs_implem(void *fsptr, size_t fssize, int *errnoptr,
-                         struct statvfs* stbuf) {
-    /* Step 1: Initialize the filesystem */
+int __myfs_statfs_implem(void *fsptr, size_t fssize, int *errnoptr, struct statvfs* stbuf) {
+    /*Init FS*/
     if (!init_fs(fsptr, fssize)) {
-        *errnoptr = EFAULT; // Bad address
+        *errnoptr = EFAULT; 
         return -1;
     }
 
-    /* Step 2: Validate the input statvfs structure */
-    if (stbuf == NULL) {
-        *errnoptr = EFAULT; // Bad address
+    /*Check stat buffer*/
+    if (!stbuf) {
+        *errnoptr = EFAULT;
         return -1;
     }
 
-    /* Step 3: Zero out the statvfs structure */
+    /*0 stbuf*/
     memset(stbuf, 0, sizeof(struct statvfs));
 
-    /* Step 4: Populate the required fields */
-
-    /* f_bsize: Block size */
+    /*Populate fields */
     stbuf->f_bsize = BLOCK_SIZE;
-
-    /* f_frsize: Fragment size (optional, can set to f_bsize) */
     stbuf->f_frsize = BLOCK_SIZE;
-
-    /* f_blocks: Total number of blocks in the filesystem */
     stbuf->f_blocks = calculate_total_blocks(fssize);
-
-    /* f_bfree: Number of free blocks */
     stbuf->f_bfree = calculate_free_blocks(fsptr, fssize);
-
-    /* f_bavail: Number of free blocks available to non-superuser */
-    stbuf->f_bavail = stbuf->f_bfree; // Assuming no reserved blocks
-
-    /* f_namemax: Maximum length of filenames */
+    stbuf->f_bavail = stbuf->f_bfree; 
     stbuf->f_namemax = MAX_FILENAME;
-    /* Step 5: Return success */
+
+    /*Success*/
     return 0;
 }
