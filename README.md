@@ -254,7 +254,8 @@ size_t calculate_free_blocks(void *fsptr, size_t fssize)
 
 ### 13. `__myfs_statfs_implem`
 
-
+- It's just a matter of filling up `stbuf` with the file system's information using functions and defines in the helper functions section.
+  
 ## Testing process
 
 We used GDB with breakpoints to test each of the functions, as well as various linux filesystem command line tools.
