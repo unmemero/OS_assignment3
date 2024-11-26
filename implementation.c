@@ -1755,7 +1755,7 @@ int __myfs_truncate_implem(void *fsptr, size_t fssize, int *errnoptr, const char
 
             /*Mark the dblock as used*/
             fs_info_block *info_block = (fs_info_block*)fsptr;
-            uint8_t *data_bitmap = (u_int8_tint*)offset_to_ptr(fsptr, fssize, info_block->free_block_bitmap);
+            uint8_t *data_bitmap = (uint8_t*)offset_to_ptr(fsptr, fssize, info_block->free_block_bitmap);
             if (data_bitmap) {
                 size_t block_num = (data_block_offset - info_block->data_blocks) / BLOCK_SIZE;
                 if (block_num >= MAX_DATA_BLOCKS) {
