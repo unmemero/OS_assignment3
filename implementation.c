@@ -954,9 +954,9 @@ int __myfs_mknod_implem(void *fsptr, size_t fssize, int *errnoptr, const char *p
 
     /*Add entry to parent dir*/
     if (add_dir_entry(fsptr, fssize, parent_dir, parent_inode_offset, file_name, new_inode_offset) != 0) {
-        /* ailed to add dir, unmark the inode in bitmap*/
+        /* Failed to add dir, unmark the inode in bitmap*/
         fs_info_block *info_block = (fs_info_block*)fsptr;
-        unsigned char *bitmap = (unsigned char*)offset_to_ptr(fsptr, fssize, info_block->free_inode_bitmap);
+        uint8_t *bitmap = (uint8_t*)offset_to_ptr(fsptr, fssize, info_block->free_inode_bitmap);
         size_t inode_num = (new_inode_offset - info_block->inode_table) / INODE_SIZE;
         if (inode_num < MAX_INODES) bitmap[inode_num / 8] &= ~(1 << (inode_num % 8));
         /*Reset inode*/

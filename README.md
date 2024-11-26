@@ -1,6 +1,6 @@
 # Assignment 3
 
-**Contributors:** Rafael Garcia and Isaac G. Padilla\
+**Contributors:** Rafael Garcia and Isaac G. Padilla
 
 ## General Initial considerations
 
@@ -187,11 +187,21 @@ size_t calculate_free_blocks(void *fsptr, size_t fssize)
 
 ### 3. `__myfs_mknod_implem`
 
--
+- In this point, since we were working on split fuinctions, we thought it would be a good idea implement a function that split the path into the child and parent components of a path. We determined for this function we required to get the parent directory first, get the entries, and check if the entry we want to add existed.
+- If all was good with that, we just needed to create a new node at the offset marked by the inode bitmap on which node was free.
+- We then populated the node with the file's information.
+- To add it to the parent, we created `add_dir_entry`, since we were developing various functions in parallel, and determined that it would be simpler to keep that into a single function. In the case we couldn't add it to the parent directory, we just free the inode bitmap, and the rest of the allocs.
+- After that, we cleanup allocated strings, and return 0 on success.
 
 ### 4. `__myfs_unlink_implem`
 
+- We did a simillar process as in `mknod` initially, where we find the parent directory, got the entries of the parent, found the file, and got the offset of the inode.
+- After this, since other functions that we were developing in parallel caused required the removal from a directory, we decided to implement [`remove_dir_entry`](#7) , to remove both files and directories from a parent directory.
+- After this, we just clean the bitmap, set the inode to 0, and free allocated memory.
+
 ### 5. `__myfs_rmdir_implem`
+
+- 
 
 ### 6. `__myfs_mkdir_implem`
 
