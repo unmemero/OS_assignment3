@@ -639,6 +639,9 @@ size_t calculate_total_blocks(size_t fssize) {
     return fssize / BLOCK_SIZE;
 }
 
+/**
+ * Get inode bitmap for dara block
+*/
 uint8_t * get_block_bitmap(void *fsptr, size_t fssize) {
     /*Make info block*/
     fs_info_block *info_block = (fs_info_block*)fsptr;
