@@ -315,7 +315,7 @@ static void* offset_to_ptr(void *fsptr, size_t fssize, size_t offset){
  * Init the fs
  */
 static int init_fs(void *fsptr, size_t fssize){
-    /*Info block at current */
+    /*Info block at beggining of file system*/
     fs_info_block *info_block = (fs_info_block*)fsptr;
     
     /*FS already init*/
@@ -353,7 +353,7 @@ static int init_fs(void *fsptr, size_t fssize){
     /*Init inode bitmap*/
     memset(offset_to_ptr(fsptr, fssize, info_block->free_inode_bitmap), 0, MAX_INODES / 8);
 
-    /* Mark root as used */
+    /*Mark root as used*/
     uint8_t *inode_bitmap = (uint8_t *)offset_to_ptr(fsptr, fssize, info_block->free_inode_bitmap);
     inode_bitmap[0] |= (uint8_t)1;
 
@@ -361,18 +361,23 @@ static int init_fs(void *fsptr, size_t fssize){
     memset(offset_to_ptr(fsptr, fssize, info_block->free_block_bitmap), 0, MAX_DATA_BLOCKS / 8);
     
     /*Mark root's data block as used*/
-    unsigned char *data_bitmap = (unsigned char*)offset_to_ptr(fsptr, fssize, info_block->free_block_bitmap);
+    uint8_t *data_bitmap = (uint8_t*)offset_to_ptr(fsptr, fssize, info_block->free_block_bitmap);
     if (data_bitmap) data_bitmap[0] |= 1;
 
+    /*FS is init. Yay*/
     return 1;
 }
 
-
+/**
+ * Find a node in the filesystem
+ */
 static inode* find_inode(void *fsptr, size_t fssize, const char * path, size_t *inode_offset_ptr){
+    /*Get initial filesystem info*/
     fs_info_block *info_block = (fs_info_block*)fsptr;
     inode *curr_inode = (inode *)offset_to_ptr(fsptr, fssize, info_block->root_inode);
     size_t curr_offset = info_block->root_inode;
 
+    /*Path is root*/
     if(!strcmp(path, "/")){
         *inode_offset_ptr = curr_offset;
         return curr_inode;
@@ -380,8 +385,11 @@ static inode* find_inode(void *fsptr, size_t fssize, const char * path, size_t *
 
     /*Tokenize path*/
     char *path_cpy = strdup(path);
+
+    /*No path provided*/
     if (!path_cpy) return NULL;
 
+    /*Tokenize path*/
     char *token = strtok(path_cpy, "/");
     while(token){
         if(!(curr_inode->mode & S_IFDIR)){
@@ -391,9 +399,8 @@ static inode* find_inode(void *fsptr, size_t fssize, const char * path, size_t *
 
         /*Iterate through directory*/
         directory_entry *entries = (directory_entry *)offset_to_ptr(fsptr, fssize, curr_inode->data_block);
-        size_t num_entries = curr_inode->size / sizeof(directory_entry);
+        size_t num_entries = curr_inode->size / sizeof(directory_entry), next_offset = 0;
         inode *next_inode = NULL;
-        size_t next_offset = 0;
         int found = 0;
 
         for(size_t i = 0; i < num_entries; i++){
@@ -405,15 +412,15 @@ static inode* find_inode(void *fsptr, size_t fssize, const char * path, size_t *
                 }
         }
 
+        /*Inode not found, you must DIE*/
         if(!found){
                 free(path_cpy);
                 return NULL;
         }
 
-        /*Move to next inode*/
+        /*Move to next inode...*/
         curr_inode = next_inode;
         curr_offset = next_offset;
-
         token = strtok(NULL, "/");
     }
 
@@ -423,188 +430,240 @@ static inode* find_inode(void *fsptr, size_t fssize, const char * path, size_t *
     return curr_inode;
 }
 
-/*Split path into parent dir and base name*/
+/**
+ * Split path into parent dir and base name
+ */
 static int split_path(const char *path, char **parent_path, char **base_name) {
-      if (!path || !parent_path || !base_name) return -1;
-      
-      char *path_cpy = strdup(path);
-      if (!path_cpy) return -1;
-      
-      char *last_slash = strrchr(path_cpy, '/');
-      /* Invalid path */
-      if (last_slash == NULL) {
-            free(path_cpy);
-            return -1;
-      }
-      
-      /* Parent directory is root */
-      if (last_slash == path_cpy) {
-            *parent_path = strdup("/");
-      } else {
-            *last_slash = '\0';
-            *parent_path = strdup(path_cpy);
-      }
-      
-      if(!(*parent_path)) {
-            free(path_cpy);
-            return -1;
-      }
-      
-      *base_name = strdup(last_slash + 1);
-      if (!(*base_name)) {
-            free(path_cpy);
-            free(*parent_path);
-            return -1;
-      }
-      
-      free(path_cpy);
-      return 0;
+    /*Empty directory*/
+    if (!path || !parent_path || !base_name) return -1;
+    
+    /*Create path copy*/
+    char *path_cpy = strdup(path);
+    if (!path_cpy) return -1;
+    
+    /*Find last slash*/
+    char *last_slash = strrchr(path_cpy, '/');
+    /* Invalid path */
+    if (last_slash == NULL) {
+        free(path_cpy);
+        return -1;
+    }
+
+    /*Parent directory is root*/
+    if (last_slash == path_cpy) *parent_path = strdup("/");
+    else {
+        *last_slash = '\0';
+        *parent_path = strdup(path_cpy);
+    }
+    if(!(*parent_path)) {
+        free(path_cpy);
+        return -1;
+    }
+    
+    /*Git base name*/
+    *base_name = strdup(last_slash + 1);
+    if (!(*base_name)) {
+        free(path_cpy);
+        free(*parent_path);
+        return -1;
+    }
+    
+    /*Cleanup and return*/
+    free(path_cpy);
+    return 0;
 }
 
 /*Find a free inode*/
 static size_t find_free_inode(void *fsptr, size_t fssize) {
-    fs_info_block *info_block = (fs_info_block*)fsptr;
-    unsigned char *bitmap = (unsigned char*)offset_to_ptr(fsptr, fssize, info_block->free_inode_bitmap);
+    size_t inode_num, inode_offset;
+    /*Make info block*/
+    fs_info_block *info_block = (fs_info_block*)fsptr;\
+    /*Get offset to ptr for start of bitmap*/
+    uint8_t *bitmap = (uint8_t*)offset_to_ptr(fsptr, fssize, info_block->free_inode_bitmap);
     if (!bitmap) return (size_t)-1;
     
+    /*Iterate through iNodes, by Apple™*/
     for (size_t byte = 0; byte < MAX_INODES / 8; byte++) {
+        /*Byte not equal to -1 char*/
         if (bitmap[byte] != 0xFF) {
+            /*Iterate through bits*/
             for (int bit = 0; bit < 8; bit++) {
-                size_t inode_num = byte * 8 + bit;
+                inode_num = byte * 8 + bit;
+                /*Reached last iNode, by Apple™*/
                 if (inode_num >= MAX_INODES) break;
+                /*Check if current iNode, by Apple™, is free*/
                 if (!(bitmap[byte] & (1 << bit))) {
+                    /*Mark iNode, by Apple™, as used*/
                     bitmap[byte] |= (1 << bit);
-                    size_t inode_offset = info_block->inode_table + inode_num * INODE_SIZE;
+                    /*Calculate offset to iNode, by Apple™*/
+                    inode_offset = info_block->inode_table + inode_num * INODE_SIZE;
+                    /*Return offse*/
                     return inode_offset;
                 }
             }
         }
     }
     
+    /*You have failed me Anakin*/
     return (size_t)-1;
 }
 
 int add_dir_entry(void *fsptr, size_t fssize, inode *dir_inode, size_t dir_inode_offset, const char *name, size_t new_inode_offset) {
-      size_t num_entries = dir_inode->size / sizeof(directory_entry);
-      size_t max_entries = BLOCK_SIZE / sizeof(directory_entry);
-      if (num_entries >= max_entries) return -1; 
+    /*Get current number of entries from dir*/
+    size_t num_entries = dir_inode->size / sizeof(directory_entry), max_entries = BLOCK_SIZE / sizeof(directory_entry);
 
-      directory_entry *new_entry = (directory_entry*)offset_to_ptr(fsptr, fssize, dir_inode->data_block + num_entries * sizeof(directory_entry));
-      if (!new_entry) return -1;
-      strncpy(new_entry->name, name, MAX_FILENAME - 1);
-      new_entry->name[MAX_FILENAME - 1] = '\0'; 
-      new_entry->inode_offset = new_inode_offset;
+    /*We can't add more dir entries!! too many*/
+    if (num_entries >= max_entries) return -1; 
 
-      dir_inode->size += sizeof(directory_entry);
-      dir_inode->modification_time = dir_inode->change_time = time(NULL);
+    /*Make new entry*/
+    directory_entry *new_entry = (directory_entry*)offset_to_ptr(fsptr, fssize, dir_inode->data_block + num_entries * sizeof(directory_entry));
 
-      return 0; 
+    /*Bad offset*/
+    if (!new_entry) return -1;
+
+    /*Copy name into new dir entry*/
+    strncpy(new_entry->name, name, MAX_FILENAME - 1);
+    new_entry->name[MAX_FILENAME - 1] = '\0'; 
+
+    /*Set offset (huh, kinda rhymed)*/
+    new_entry->inode_offset = new_inode_offset;
+
+    /*Update size of dir*/
+    dir_inode->size += sizeof(directory_entry);
+
+    /*Update times*/
+    dir_inode->modification_time = dir_inode->change_time = time(NULL);
+
+    /*All good in the hood*/
+    return 0; 
 }
 
 
-/*Remove entry from dir inode*/
+/**
+ * Remove entry from dir inode
+*/
 static int remove_dir_entry(void *fsptr, size_t fssize, inode *dir_inode, size_t dir_inode_offset, const char *name) {
-      /*Get entries from dir*/
-      directory_entry *entries = (directory_entry *)offset_to_ptr(fsptr, fssize, dir_inode->data_block);
-      if (!entries) return -1;
-      
-      size_t num_entries = dir_inode->size / sizeof(directory_entry);
-      size_t target_index = num_entries;
-      
-      /*Find target entry*/
-      for (size_t i = 0; i < num_entries; i++) {
-            if (strcmp(entries[i].name, name) == 0) {
-                  target_index = i;
-                  break;
-            }
-      }
-      
-      /*Entry not found*/
-      if (target_index == num_entries) return -1;
-      
-      /*Shift entries */
-      for (size_t i = target_index; i < num_entries - 1; i++) entries[i] = entries[i + 1];
-      
-      /* Zero out the last entry */
-      memset(&entries[num_entries - 1], 0, sizeof(directory_entry));
-      
-      /*Update size*/
-      dir_inode->size -= sizeof(directory_entry);
-      
-      /* Update times*/
-      dir_inode->modification_time = dir_inode->change_time = time(NULL);
-      
-      return 0; 
+    /*Get entries from dir*/
+    directory_entry *entries = (directory_entry *)offset_to_ptr(fsptr, fssize, dir_inode->data_block);
+    if (!entries) return -1;
+    
+    /*Gets num entries used for dir*/
+    size_t num_entries = dir_inode->size / sizeof(directory_entry);
+    size_t target_index = num_entries;
+    
+    /*Seek*/
+    for (size_t i = 0; i < num_entries; i++) {
+        if (strcmp(entries[i].name, name) == 0) {
+                target_index = i;
+                break;
+        }
+    }
+    
+    /*Entry not found, we'll get it next time*/
+    if (target_index == num_entries) return -1;
+    
+    /*sll entries*/
+    for (size_t i = target_index; i < num_entries - 1; i++) entries[i] = entries[i + 1];
+    
+    /*Zero out the last entry (DEstroy)*/
+    memset(&entries[num_entries - 1], 0, sizeof(directory_entry));
+    
+    /*Update size*/
+    dir_inode->size -= sizeof(directory_entry);
+    
+    /*Update times*/
+    dir_inode->modification_time = dir_inode->change_time = time(NULL);
+    
+    /*Target obliterated*/
+    return 0; 
 }
 
-/*Find free data block*/
+/**
+ * Find free data block
+*/
 static size_t find_free_data_block(void *fsptr, size_t fssize) {
+    /*Get the info block*/
     fs_info_block *info_block = (fs_info_block*)fsptr;
-    size_t max_data_blocks = info_block->max_data_blocks; // Renamed variable
+    /*Get the max number of data blocks*/
+    size_t max_data_blocks = info_block->max_data_blocks; 
+    /*Get the bitmap offset*/
     unsigned char *bitmap = (unsigned char*)offset_to_ptr(fsptr, fssize, info_block->free_block_bitmap);
     if (!bitmap) return (size_t)-1;
 
+    /*Block offset, 'init*/
+    size_t block_offset;
+
+    /*Iterate through data blocks*/
     for (size_t block_num = 0; block_num < max_data_blocks; block_num++) {
+        /*Check if block is free*/
         if (!(bitmap[block_num / 8] & (1 << (block_num % 8)))) {
-            // Mark block as used
+            /*Mark block as used*/
             bitmap[block_num / 8] |= (1 << (block_num % 8));
-            // Calculate block offset
-            size_t block_offset = info_block->data_blocks + block_num * BLOCK_SIZE;
+            /*Calculate block offset*/
+            block_offset = info_block->data_blocks + block_num * BLOCK_SIZE;
             return block_offset;
         }
     }
 
+    /*No free data blocks, critical failure, oh no!, it's gonna blow up!*/
     return (size_t)-1;
 }
 
 
-/* Frees a data block by marking it as free in the bitmap */
+/**
+ * Frees data block and updates bitmap 
+*/
 static int free_data_block(void *fsptr, size_t fssize, size_t block_offset) {
+    /*Get the info block*/
     fs_info_block *info_block = (fs_info_block*)fsptr;
+    /*Check if block offset is valid*/
     if (block_offset < info_block->data_blocks || block_offset >= fssize) return -1;
     
+    /*Calculate block number*/
     size_t block_num = (block_offset - info_block->data_blocks) / BLOCK_SIZE;
     if (block_num >= info_block->max_data_blocks) return -1;
     
-    unsigned char *bitmap = (unsigned char*)offset_to_ptr(fsptr, fssize, info_block->free_block_bitmap);
+    /*Get the bitmap*/
+    uint8_t *bitmap = (uint8_t*)offset_to_ptr(fsptr, fssize, info_block->free_block_bitmap);
     if (!bitmap) return -1;
     
+    /*Free the block*/
     bitmap[block_num / 8] &= ~(1 << (block_num % 8)); 
     return 0; 
 }
 
-/* Calculates the total number of blocks in the filesystem */
+/**
+ * Get total blocks 
+*/
 size_t calculate_total_blocks(size_t fssize) {
     return fssize / BLOCK_SIZE;
 }
 
-unsigned char* get_block_bitmap(void *fsptr, size_t fssize) {
+uint8_t * get_block_bitmap(void *fsptr, size_t fssize) {
+    /*Make info block*/
     fs_info_block *info_block = (fs_info_block*)fsptr;
-    return (unsigned char*)offset_to_ptr(fsptr, fssize, info_block->free_block_bitmap);
+    /*Get offset to ptr for start of bitmap*/
+    return (uint8_t*)offset_to_ptr(fsptr, fssize, info_block->free_block_bitmap);
 }
 
+/**
+ * Get number of free blocks
+*/
 size_t calculate_free_blocks(void *fsptr, size_t fssize) {
+    /*Get the bitmap pointer*/
     unsigned char *bitmap = get_block_bitmap(fsptr, fssize);
-    if (!bitmap) {
-        return 0; // Unable to access bitmap, consider as no free blocks
-    }
+    if (!bitmap) return 0; 
     
-    size_t free_blocks = 0;
-    size_t total_blocks = calculate_total_blocks(fssize);
+    /*Count free blocks*/
+    size_t free_blocks = 0, total_blocks = calculate_total_blocks(fssize);
+    size_t i;
+
+    /*Itetate to blocks and check bitmap for free blocks*/
+    for (i = 0; i < total_blocks; i++) if (!(bitmap[1/8] & (1 << (i % 8)))) free_blocks++;
     
-    for (size_t i = 0; i < total_blocks; i++) {
-        size_t byte_index = i / 8;
-        size_t bit_index = i % 8;
-        if (!(bitmap[byte_index] & (1 << bit_index))) {
-            free_blocks++;
-        }
-    }
-    
+    /*Return number of free blocks*/
     return free_blocks;
 }
-
-
-
 
 /* End of helper functions */
 
@@ -707,7 +766,7 @@ int __myfs_getattr_implem(void *fsptr, size_t fssize, int *errnoptr, uid_t uid, 
    The error codes are documented in man 2 readdir.
 
    In the case memory allocation with malloc/calloc fails, failure is
-   indicated by returning -1 and setting *errnoptr to EINVAL.
+   indicated by returning -1 and setting *errnoptr to EINVAL.__myfs_readdir_implem
 
 */
 int __myfs_readdir_implem(void *fsptr, size_t fssize, int *errnoptr,  const char *path, char ***namesptr) {
@@ -2073,7 +2132,7 @@ int __myfs_utimens_implem(void *fsptr, size_t fssize, int *errnoptr,
 
    Essentially, only the following fields of struct statvfs need to be
    supported:
-
+__myfs_utimens_implem
    f_bsize   fill with what you call a block (typically 1024 bytes)
    f_blocks  fill with the total number of blocks in the filesystem
    f_bfree   fill with the free number of blocks in the filesystem

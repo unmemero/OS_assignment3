@@ -37,5 +37,4 @@ commit:
 pdf:
 	pandoc README.md -o Report.pdf
 tar:
-	tar -czvf assignment3.tgz .
-
+	tar -czvf assignment3.tgz
