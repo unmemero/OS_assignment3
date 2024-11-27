@@ -258,4 +258,58 @@ size_t calculate_free_blocks(void *fsptr, size_t fssize)
   
 ## Testing process
 
-We used GDB with breakpoints to test each of the functions, as well as various linux filesystem command line tools.
+We tested using GDB with the following script
+
+```bash
+#!/bin/bash
+
+# Array containing all function names
+fxs=("__myfs_getattr_implem" "__myfs_readdir_implem" "__myfs_mknod_implem" "__myfs_unlink_implem" "__myfs_rmdir_implem" "__myfs_mkdir_implem" "__myfs_rename_implem" "__myfs_truncate_implem" "__myfs_open_implem" "__myfs_read_implem" "__myfs_write_implem" "__myfs_write_implem" "__myfs_utimens_implem" "__myfs_statfs_implem" "offset_to_ptr" "init_fs" "find_inode" "split_path" "find_free_inode" "add_dir_entry" "remove_dir_entry" "find_free_data_block" "free_data_block" "get_block_bitmap" "calculate_free_blocks")
+
+# Display available functions
+echo "Functions available:"
+for i in "${!fxs[@]}"; do
+    echo "$((i + 1)). ${fxs[i]}"
+done
+
+# Prompt the user to select functions
+read -p "Which functions do you want to test? (separate them by commas): " sel_fxs
+
+# Parse selected functions and build the GDB command
+IFS=',' read -ra indices <<< "$sel_fxs"  # Tokenize input by comma
+breakpoints=""
+for index in "${indices[@]}"; do
+    if [[ $index =~ ^[0-9]+$ ]] && ((index >= 1 && index <= ${#fxs[@]})); then
+        breakpoints+=" -ex 'break ${fxs[index-1]}'"
+    else
+        echo "Invalid selection: $index"
+        exit 1
+    fi
+done
+
+# Construct the GDB command
+gdb_command="gdb${breakpoints} -ex 'run' --args ./myfs --backupfile=test.myfs /home/rgarcia117/fuse-mnt/ -f"
+
+# Run the GDB command
+echo "Executing: $gdb_command"
+eval "$gdb_command"
+```
+
+- We initially run it with no input to speed up the debugging process, in other words, to avoid any interruptions by `gdb`, and we decided to use the breakpoints of the functions we thought may cause issues.
+- Whenever we got stuck in a function, we killed the `gdb` process, `cd` out of `fuse-mnt` in every terminal involved, run `make unmount`(Custom Makefile command for `fusermount -u ~/fuse-mnt`), then reran the script selecting the functions related to the current operation. In here we stepped by line and by function, printing the variables inside the current environment, and `bt` until finding the root of the issue.
+
+### Some operations we tested are the following:
+
+```bash
+stat filename #getattr and utimens
+ls -la fuse-mnt #readdir
+touch new_file #mknod
+rm -f file_to_remove #unlink
+rmdir dir_to_remove #rmdir
+mkdir new_dir #mkdir
+mv name new_name #rename
+truncate -s 1K filename #truncate
+cat filename #read and open
+echo "Hello World" > filename #write
+df -h #statfs
+```
