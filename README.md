@@ -313,3 +313,12 @@ cat filename #read and open
 echo "Hello World" > filename #write
 df -h #statfs
 ```
+
+- What gave us the most trouble was initially `mknod`, since for some reason it kept telling us it couldn't create the file because it didn't exist. At the moment, (since the only breakpoints we've included were `getattr`, `readdir`, and `mknod`), we didn't realize there were other functions involved, such as `utimens`, which still wasn't implemented. Testing with all functions helped us understand more what we needed to do about this, issue, which was completing the other functions.
+- Here, we did have a couple of segfaults while developing, mainly due to the incorrect implementation of the bitmap, which took us a bit to figure out, and the casting of `fsptr` when getting the offset being incorrectly a `size_t` pointer instead of a `char` pointer.
+- Another place where we struggled in terms of debugging was readdir, which for some reason was either not displaying `.` and `..`, or displaying them double. TO solve this, we skipped these entries when processing the names pointer.
+- One more thing that gave us headaches is writting to the filesystem as a regular mounted unit, not something running under the custom `myfs` implementation, because of not typing run in gdb, which caused a `nonempty` error in the filesystem, making `~/fuse-mnt` aregular directory instead of a mount point. This we fixed by deleting `~/fuse-mnt/`, recreating it, and rerunning the implementation correctly.
+
+## Conclusions
+
+Overall, it was a complex assignment. This showed us that implementing a filesystem is not easy, and there's not a single way to approach it, but with proper design, good debugging skills, and a good amount of test cases, it's possible to develop a working filesystem for various purposes.
