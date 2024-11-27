@@ -230,7 +230,7 @@ size_t calculate_free_blocks(void *fsptr, size_t fssize)
 
 ### 8. `__myfs_truncate_implem`
 
--
+- The part of the offset being greater than the filesize its easier, since we just need to fill the data with 0's. The other part took us a while to figure out. But it mainly consisted of removeing the datablocks full of 0's.
 
 ### 9. `__myfs_open_implem`
 
